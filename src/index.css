@@ -1,0 +1,191 @@
+@import "tailwindcss";
+
+@layer base {
+  :root {
+    --font-sans: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    --font-display: 'Syne', 'Plus Jakarta Sans', sans-serif;
+    --font-mono: 'JetBrains Mono', monospace;
+
+    /* R Mart Theme Palette - Clean Modern Marketplace */
+    --brand-black: #0F172A;
+    --brand-surface: #FFFFFF;
+    --brand-card: #FFFFFF;
+    --brand-card-hover: #F8FAFC;
+    --brand-border: #E2E8F0;
+    --brand-border-focus: rgba(16, 185, 129, 0.4);
+    
+    --brand-chrome: #0F172A;
+    --brand-chrome-dark: #64748B;
+    
+    --brand-emerald: #10B981;
+    --brand-emerald-hover: #059669;
+    --brand-emerald-glow: rgba(16, 185, 129, 0.2);
+
+    --primary: #10B981;
+    --primary-hover: #059669;
+    --primary-glow: rgba(16, 185, 129, 0.2);
+    --primary-light: rgba(16, 185, 129, 0.08);
+    --primary-foreground: #FFFFFF;
+    --background: #F8FAFC;
+    --foreground: #0F172A;
+    --muted: #64748B;
+    --border: #E2E8F0;
+  }
+
+  /* Orange (Daraz Style) Theme Palette */
+  [data-theme="orange"] {
+    --brand-border-focus: rgba(248, 86, 6, 0.4);
+    --brand-emerald: #F85606;
+    --brand-emerald-hover: #E04B00;
+    --brand-emerald-glow: rgba(248, 86, 6, 0.25);
+    --primary: #F85606;
+    --primary-hover: #E04B00;
+    --primary-glow: rgba(248, 86, 6, 0.25);
+    --primary-light: rgba(248, 86, 6, 0.1);
+    --color-emerald-300: #fdba74;
+    --color-emerald-400: #fb923c;
+    --color-emerald-500: #f85606;
+    --color-emerald-600: #e04b00;
+    --color-emerald-700: #c2410c;
+    --color-emerald-950: #431407;
+  }
+
+  /* Red Theme Palette */
+  [data-theme="red"] {
+    --brand-border-focus: rgba(239, 68, 68, 0.4);
+    --brand-emerald: #EF4444;
+    --brand-emerald-hover: #DC2626;
+    --brand-emerald-glow: rgba(239, 68, 68, 0.25);
+    --primary: #EF4444;
+    --primary-hover: #DC2626;
+    --primary-glow: rgba(239, 68, 68, 0.25);
+    --primary-light: rgba(239, 68, 68, 0.1);
+    --color-emerald-300: #fca5a5;
+    --color-emerald-400: #f87171;
+    --color-emerald-500: #ef4444;
+    --color-emerald-600: #dc2626;
+    --color-emerald-700: #b91c1c;
+    --color-emerald-950: #450a0a;
+  }
+
+  /* Crimson Theme Palette */
+  [data-theme="crimson"] {
+    --brand-border-focus: rgba(225, 29, 72, 0.4);
+    --brand-emerald: #E11D48;
+    --brand-emerald-hover: #BE123C;
+    --brand-emerald-glow: rgba(225, 29, 72, 0.25);
+    --primary: #E11D48;
+    --primary-hover: #BE123C;
+    --primary-glow: rgba(225, 29, 72, 0.25);
+    --primary-light: rgba(225, 29, 72, 0.1);
+    --color-emerald-300: #fda4af;
+    --color-emerald-400: #fb7185;
+    --color-emerald-500: #e11d48;
+    --color-emerald-600: #be123c;
+    --color-emerald-700: #9f1239;
+    --color-emerald-950: #4c0519;
+  }
+
+  /* Blue Theme Palette */
+  [data-theme="blue"] {
+    --brand-border-focus: rgba(59, 130, 246, 0.4);
+    --brand-emerald: #3B82F6;
+    --brand-emerald-hover: #2563EB;
+    --brand-emerald-glow: rgba(59, 130, 246, 0.25);
+    --primary: #3B82F6;
+    --primary-hover: #2563EB;
+    --primary-glow: rgba(59, 130, 246, 0.25);
+    --primary-light: rgba(59, 130, 246, 0.1);
+    --color-emerald-300: #93c5fd;
+    --color-emerald-400: #60a5fa;
+    --color-emerald-500: #3b82f6;
+    --color-emerald-600: #2563eb;
+    --color-emerald-700: #1d4ed8;
+    --color-emerald-950: #082f49;
+  }
+
+  /* Amber Theme Palette */
+  [data-theme="amber"] {
+    --brand-border-focus: rgba(245, 158, 11, 0.4);
+    --brand-emerald: #F59E0B;
+    --brand-emerald-hover: #D97706;
+    --brand-emerald-glow: rgba(245, 158, 11, 0.25);
+    --primary: #F59E0B;
+    --primary-hover: #D97706;
+    --primary-glow: rgba(245, 158, 11, 0.25);
+    --primary-light: rgba(245, 158, 11, 0.1);
+    --color-emerald-300: #fcd34d;
+    --color-emerald-400: #fbbf24;
+    --color-emerald-500: #f59e0b;
+    --color-emerald-600: #d97706;
+    --color-emerald-700: #b45309;
+    --color-emerald-950: #451a03;
+  }
+
+  /* Purple Theme Palette */
+  [data-theme="purple"] {
+    --brand-border-focus: rgba(139, 92, 246, 0.4);
+    --brand-emerald: #8B5CF6;
+    --brand-emerald-hover: #7C3AED;
+    --brand-emerald-glow: rgba(139, 92, 246, 0.25);
+    --primary: #8B5CF6;
+    --primary-hover: #7C3AED;
+    --primary-glow: rgba(139, 92, 246, 0.25);
+    --primary-light: rgba(139, 92, 246, 0.1);
+    --color-emerald-300: #c4b5fd;
+    --color-emerald-400: #a78bfa;
+    --color-emerald-500: #8b5cf6;
+    --color-emerald-600: #7c3aed;
+    --color-emerald-700: #6d28d9;
+    --color-emerald-950: #2e1065;
+  }
+
+  body {
+    font-family: var(--font-sans);
+    background-color: var(--background);
+    color: var(--foreground);
+    min-height: 100vh;
+    overflow-x: hidden;
+  }
+
+  h1, h2, h3, .font-display {
+    font-family: var(--font-display);
+  }
+}
+
+/* Custom scrollbar */
+::-webkit-scrollbar {
+  width: 7px;
+  height: 7px;
+}
+::-webkit-scrollbar-track {
+  background: #F1F5F9;
+}
+::-webkit-scrollbar-thumb {
+  background: #CBD5E1;
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #94A3B8;
+}
+
+/* Print Invoice Styling */
+@media print {
+  body {
+    background: #ffffff !important;
+    color: #000000 !important;
+  }
+  .no-print {
+    display: none !important;
+  }
+  .print-only {
+    display: block !important;
+  }
+  .print-container {
+    padding: 0 !important;
+    background: #ffffff !important;
+    color: #000000 !important;
+    border: none !important;
+    box-shadow: none !important;
+  }
+}

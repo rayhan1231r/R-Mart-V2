@@ -1,0 +1,6 @@
+{
+  "name": "R Mart - Official Online Store",
+  "description": "R Mart official all-category e-commerce marketplace in Bangladesh. Premium fashion, electronics, lifestyle and household shopping with fast nationwide delivery and Cash on Delivery.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
