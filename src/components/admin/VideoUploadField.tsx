@@ -77,7 +77,12 @@ export const VideoUploadField: React.FC<VideoUploadFieldProps> = ({
     }
 
     if (addedUrls.length > 0) {
-      onChange([...videos, ...addedUrls]);
+      // Put newly uploaded videos at index 0 so they immediately become the Primary Video
+      onChange([...addedUrls, ...videos].slice(0, maxVideos));
+      setSuccessNotice(
+        `Video uploaded and set as Primary Video (#1). Previous video(s) moved to secondary.`
+      );
+      setTimeout(() => setSuccessNotice(null), 4000);
     }
 
     setIsProcessing(false);
@@ -93,10 +98,29 @@ export const VideoUploadField: React.FC<VideoUploadFieldProps> = ({
     }
 
     setErrorMessage(null);
-    onChange([...videos, trimmed]);
+    // Put new URL at index 0 so it becomes the Primary Video
+    onChange([trimmed, ...videos].slice(0, maxVideos));
     setUrlInput('');
-    setSuccessNotice('Video link added to product successfully.');
+    setSuccessNotice('Video link added as Primary Video (#1).');
     setTimeout(() => setSuccessNotice(null), 3000);
+  };
+
+  const handleSetPrimary = (index: number) => {
+    if (index === 0 || index >= videos.length) return;
+    const selected = videos[index];
+    const rest = videos.filter((_, i) => i !== index);
+    onChange([selected, ...rest]);
+    setSuccessNotice(`Video #${index + 1} is now set as the Primary Video.`);
+    setTimeout(() => setSuccessNotice(null), 3000);
+  };
+
+  const handleClearAll = () => {
+    if (window.confirm('Are you sure you want to remove all videos from this product?')) {
+      onChange([]);
+      setErrorMessage(null);
+      setSuccessNotice('All videos removed from product.');
+      setTimeout(() => setSuccessNotice(null), 3000);
+    }
   };
 
   const handleRemove = (index: number) => {
@@ -269,8 +293,18 @@ export const VideoUploadField: React.FC<VideoUploadFieldProps> = ({
       {/* Uploaded Videos List */}
       {videos.length > 0 && (
         <div className="space-y-2 pt-1">
-          <div className="text-[11px] font-bold text-slate-400 uppercase tracking-wider">
-            Added Videos ({videos.length})
+          <div className="flex items-center justify-between">
+            <div className="text-[11px] font-bold text-slate-400 uppercase tracking-wider flex items-center gap-2">
+              <span>Added Videos ({videos.length}/{maxVideos})</span>
+              <span className="text-[10px] text-emerald-400 font-normal">Video #1 plays first on store</span>
+            </div>
+            <button
+              type="button"
+              onClick={handleClearAll}
+              className="text-[10px] text-rose-400 hover:text-rose-300 font-semibold transition-colors"
+            >
+              Clear All ({videos.length})
+            </button>
           </div>
           <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
             {videos.map((vidUrl, index) => (
@@ -278,6 +312,8 @@ export const VideoUploadField: React.FC<VideoUploadFieldProps> = ({
                 key={index}
                 url={vidUrl}
                 index={index}
+                isPrimary={index === 0}
+                onSetPrimary={() => handleSetPrimary(index)}
                 onRemove={() => handleRemove(index)}
                 onPreview={() => setPreviewVideoUrl(vidUrl)}
               />
@@ -317,17 +353,39 @@ export const VideoUploadField: React.FC<VideoUploadFieldProps> = ({
 const VideoPreviewCard: React.FC<{
   url: string;
   index: number;
+  isPrimary: boolean;
+  onSetPrimary: () => void;
   onRemove: () => void;
   onPreview: () => void;
-}> = ({ url, index, onRemove, onPreview }) => {
+}> = ({ url, index, isPrimary, onSetPrimary, onRemove, onPreview }) => {
   const isEmbed = isEmbedVideo(url);
 
   return (
-    <div className="relative group rounded-xl overflow-hidden border border-white/10 bg-white/[0.04] p-2 flex flex-col justify-between">
+    <div
+      className={`relative group rounded-xl overflow-hidden border p-2 flex flex-col justify-between transition-colors ${
+        isPrimary
+          ? 'border-emerald-500/60 bg-emerald-500/[0.06] ring-1 ring-emerald-500/30'
+          : 'border-white/10 bg-white/[0.04]'
+      }`}
+    >
       <div className="flex items-center justify-between mb-2">
-        <span className="px-2 py-0.5 rounded-md bg-emerald-500/20 text-emerald-400 text-[10px] font-bold">
-          Video #{index + 1}
-        </span>
+        <div className="flex items-center gap-1.5">
+          {isPrimary ? (
+            <span className="px-2 py-0.5 rounded-md bg-emerald-500 text-slate-950 text-[10px] font-extrabold flex items-center gap-1">
+              ★ Main (Plays 1st)
+            </span>
+          ) : (
+            <button
+              type="button"
+              onClick={onSetPrimary}
+              className="px-2 py-0.5 rounded-md bg-white/10 hover:bg-emerald-500/20 text-slate-300 hover:text-emerald-300 text-[10px] font-semibold transition-colors"
+              title="Make this the first video customers see"
+            >
+              Set as Main
+            </button>
+          )}
+          <span className="text-[10px] text-slate-400 font-mono">#{index + 1}</span>
+        </div>
         <button
           type="button"
           onClick={onRemove}
@@ -346,20 +404,20 @@ const VideoPreviewCard: React.FC<{
           <Play className="w-4 h-4 fill-slate-950 ml-0.5" />
         </div>
         <span className="absolute bottom-1.5 left-1.5 text-[9px] bg-black/70 px-1.5 py-0.5 rounded text-white font-mono">
-          {isEmbed ? 'External' : 'Upload'}
+          {isEmbed ? 'External' : url.startsWith('/uploads/') ? 'Server' : 'Upload'}
         </span>
       </div>
 
       <div className="mt-2 flex items-center justify-between text-[11px] text-slate-400">
-        <span className="truncate max-w-[140px]">
-          {url.startsWith('idb://') ? 'Uploaded Local Video' : url}
+        <span className="truncate max-w-[130px] font-mono text-[10px]" title={url}>
+          {url.startsWith('idb://') ? 'Uploaded Local' : url.startsWith('/uploads/') ? url.split('/').pop() : url}
         </span>
         <button
           type="button"
           onClick={onPreview}
-          className="text-emerald-400 hover:text-emerald-300 font-semibold"
+          className="text-emerald-400 hover:text-emerald-300 font-semibold shrink-0 ml-1"
         >
-          Play
+          Preview
         </button>
       </div>
     </div>

@@ -452,13 +452,13 @@ export const AdminProducts: React.FC<AdminProductsProps> = ({
 
       if (editingProduct) {
         await updateProduct(editingProduct.id, productPayload, user?.email);
-        setToastMessage(`Product "${name}" updated successfully.`);
+        setToastMessage(`Product "${name}" updated successfully (${videos.length} video${videos.length === 1 ? '' : 's'}).`);
       } else {
         await createProduct(productPayload, user?.email, broadcastOnCreate);
         if (broadcastOnCreate) {
           setToastMessage(`Product "${name}" published & AI promo email broadcasted to customers!`);
         } else {
-          setToastMessage(`Product "${name}" published to store successfully.`);
+          setToastMessage(`Product "${name}" published to store successfully (${videos.length} video${videos.length === 1 ? '' : 's'}).`);
         }
       }
 

@@ -90,25 +90,35 @@ export function extractGoogleDriveId(url: string): string | null {
 }
 
 /**
- * Read the duration of a video file in seconds
+ * Read the duration of a video file in seconds with safe timeout fallback
  */
 export function getVideoDuration(file: File): Promise<number> {
-  return new Promise((resolve, reject) => {
+  return new Promise((resolve) => {
+    let finished = false;
     const video = document.createElement('video');
     video.preload = 'metadata';
     const objectUrl = URL.createObjectURL(file);
 
     const cleanup = () => {
-      URL.revokeObjectURL(objectUrl);
-      video.removeAttribute('src');
-      video.load();
+      if (finished) return;
+      finished = true;
+      try {
+        URL.revokeObjectURL(objectUrl);
+        video.removeAttribute('src');
+        video.load();
+      } catch {}
     };
 
+    const timer = setTimeout(() => {
+      cleanup();
+      resolve(0); // Gracefully allow if metadata parsing times out
+    }, 4000);
+
     video.onloadedmetadata = () => {
+      clearTimeout(timer);
       const duration = video.duration;
       cleanup();
       if (!duration || isNaN(duration)) {
-        // Fallback for some encoded videos
         resolve(0);
       } else {
         resolve(duration);
@@ -116,12 +126,9 @@ export function getVideoDuration(file: File): Promise<number> {
     };
 
     video.onerror = () => {
+      clearTimeout(timer);
       cleanup();
-      reject(
-        new Error(
-          'Failed to load video metadata. Please make sure the file is a valid video format (MP4, WebM, MOV).'
-        )
-      );
+      resolve(0); // Gracefully fallback if browser cannot inspect metadata
     };
 
     video.src = objectUrl;
@@ -138,9 +145,19 @@ export function formatVideoDuration(seconds: number): string {
   return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
 }
 
+function readFileAsDataUrl(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result as string);
+    reader.onerror = () => reject(reader.error);
+    reader.readAsDataURL(file);
+  });
+}
+
 /**
- * Validate and save a video file into IndexedDB
- * Returns a persistent video identifier (e.g. `idb://video_16999999`)
+ * Validate and save a video file.
+ * Prioritizes persistent server storage (/api/upload-video -> /uploads/...),
+ * with resilient fallback to client IndexedDB for static hosting.
  */
 export async function saveVideoFile(file: File): Promise<{
   url: string;
@@ -156,7 +173,7 @@ export async function saveVideoFile(file: File): Promise<{
 
   // 2. Validate duration (Max 4 minutes = 240 seconds)
   const duration = await getVideoDuration(file);
-  if (duration > MAX_VIDEO_DURATION_SECONDS) {
+  if (duration > 0 && duration > MAX_VIDEO_DURATION_SECONDS) {
     const mins = Math.floor(duration / 60);
     const secs = Math.floor(duration % 60);
     throw new Error(
@@ -168,7 +185,39 @@ export async function saveVideoFile(file: File): Promise<{
   const sizeMb = (file.size / (1024 * 1024)).toFixed(1);
   const sizeFormatted = `${sizeMb} MB`;
 
-  // 4. Save blob in IndexedDB
+  // 4. Try persistent server upload endpoint first
+  try {
+    const fileData = await readFileAsDataUrl(file);
+    const res = await fetch('/api/upload-video', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        fileName: file.name,
+        fileData,
+        fileType: file.type || 'video/mp4',
+      }),
+    });
+
+    if (res.ok) {
+      const data = await res.json();
+      if (data && data.success && data.url) {
+        // Also register in local blob cache for zero-latency instant preview
+        const liveUrl = URL.createObjectURL(file);
+        blobUrlCache.set(data.url, liveUrl);
+
+        return {
+          url: data.url,
+          duration,
+          sizeFormatted: data.sizeFormatted || sizeFormatted,
+          name: file.name,
+        };
+      }
+    }
+  } catch (serverErr) {
+    console.info('[Video Storage] Server upload notice, falling back to IndexedDB:', serverErr);
+  }
+
+  // 5. Fallback: Save blob into client IndexedDB
   const id = `video_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
   const db = await openDb();
 

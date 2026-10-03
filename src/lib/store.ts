@@ -811,21 +811,11 @@ export async function getProducts(options?: {
   sortBy?: 'newest' | 'price-asc' | 'price-desc' | 'popular';
 }): Promise<Product[]> {
   let products: Product[] = getLocalItem<Product[]>(STORAGE_KEYS.PRODUCTS, DEFAULT_PRODUCTS);
+  // Sync catalog products with initial defaults only if no products are stored
   if (!products || products.length === 0) {
     products = DEFAULT_PRODUCTS;
     setLocalItem(STORAGE_KEYS.PRODUCTS, products);
   }
-
-  // Ensure catalog products have valid video showcases if missing in cached storage
-  products = products.map((p) => {
-    if (!p.videos || p.videos.length === 0) {
-      const def = DEFAULT_PRODUCTS.find((dp) => dp.id === p.id || dp.slug === p.slug);
-      if (def?.videos && def.videos.length > 0) {
-        return { ...p, videos: def.videos };
-      }
-    }
-    return p;
-  });
 
   if (isFirebaseConfigured() && db) {
     try {
@@ -833,10 +823,21 @@ export async function getProducts(options?: {
       const snap = await getDocs(colRef);
       if (!snap.empty) {
         const fsProducts = snap.docs.map((d) => ({ id: d.id, ...d.data() } as Product));
-        // Merge with local items by ID so recently created local products are preserved
+        // Smart merge: keep the most recently updated version between local and remote
         const map = new Map<string, Product>();
-        products.forEach((p) => map.set(p.id, p));
         fsProducts.forEach((p) => map.set(p.id, p));
+        products.forEach((p) => {
+          const remote = map.get(p.id);
+          if (!remote) {
+            map.set(p.id, p);
+          } else {
+            const localTime = p.updatedAt ? new Date(p.updatedAt).getTime() : 0;
+            const remoteTime = remote.updatedAt ? new Date(remote.updatedAt).getTime() : 0;
+            if (localTime >= remoteTime) {
+              map.set(p.id, p);
+            }
+          }
+        });
         products = Array.from(map.values());
         setLocalItem(STORAGE_KEYS.PRODUCTS, products);
       } else if (products.length > 0) {
@@ -941,12 +942,6 @@ export async function getProductById(id: string): Promise<Product | null> {
   const products = getLocalItem<Product[]>(STORAGE_KEYS.PRODUCTS, DEFAULT_PRODUCTS);
   const effectiveList = products && products.length > 0 ? products : DEFAULT_PRODUCTS;
   const found = effectiveList.find((p) => p.id === id || p.slug === id) || null;
-  if (found && (!found.videos || found.videos.length === 0)) {
-    const def = DEFAULT_PRODUCTS.find((dp) => dp.id === found.id || dp.slug === found.slug);
-    if (def?.videos && def.videos.length > 0) {
-      return { ...found, videos: def.videos };
-    }
-  }
   return found;
 }
 
@@ -3248,6 +3243,165 @@ export async function suggestAiPricing(
     return await res.json();
   } catch (err: any) {
     return { success: false, error: err?.message };
+  }
+}
+
+export async function generateAiBannerPrompt(params: {
+  bannerType?: 'offers' | 'percentage' | 'products_offer' | 'product_details' | 'coupon_card';
+  couponCode?: string;
+  discountText?: string;
+  percentage?: string;
+  campaignTheme?: string;
+  productName?: string;
+  productPrice?: string;
+  productFeatures?: string;
+  productOfferTitle?: string;
+  category?: string;
+  audience?: string;
+  customPrompt?: string;
+  colorMood?: string;
+}): Promise<{
+  success: boolean;
+  prompt: string;
+  title: string;
+  subtitle: string;
+  buttonText: string;
+  buttonLink: string;
+  tagline: string;
+  accentColor?: string;
+  error?: string;
+}> {
+  try {
+    const res = await fetch('/api/ai/generate-banner-prompt', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(params),
+    });
+    if (res.ok) {
+      return await res.json();
+    }
+    throw new Error('Failed to generate prompt');
+  } catch (err: any) {
+    return {
+      success: false,
+      prompt: 'Ultra-luxurious 16:9 commercial promotional banner for R Mart Bangladesh. High-energy festive e-commerce atmosphere with floating 3D elements, soft studio lighting, and clean copy space.',
+      title: params.campaignTheme || 'Special Store Offer',
+      subtitle: params.discountText || 'Huge savings on premium quality products nationwide.',
+      buttonText: 'Shop Special Deal',
+      buttonLink: '/shop',
+      tagline: 'Special Promo',
+      accentColor: '#10B981',
+      error: err?.message,
+    };
+  }
+}
+
+export async function generateAiBannerImage(params: {
+  prompt: string;
+  category?: string;
+}): Promise<{
+  success: boolean;
+  imageUrl?: string;
+  generatedWithGemini?: boolean;
+  fallbackRequired?: boolean;
+  error?: string;
+}> {
+  try {
+    const res = await fetch('/api/ai/generate-banner-image', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(params),
+    });
+    return await res.json();
+  } catch (err: any) {
+    return {
+      success: false,
+      fallbackRequired: true,
+      error: err?.message || 'Network error calling banner image API',
+    };
+  }
+}
+
+export async function uploadImage(
+  fileData: string,
+  fileName?: string
+): Promise<{ success: boolean; url?: string; name?: string; error?: string }> {
+  try {
+    const res = await fetch('/api/upload-image', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ fileData, fileName }),
+    });
+    return await res.json();
+  } catch (err: any) {
+    return { success: false, error: err?.message || 'Failed to upload image' };
+  }
+}
+
+// ----------------------------------------------------
+// AI SUITE UNIFIED CLIENT HELPERS (15+ AI TOOLS)
+// ----------------------------------------------------
+export async function callAiSuiteAction(action: string, payload: any = {}): Promise<any> {
+  try {
+    const res = await fetch('/api/ai/suite-action', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action, payload }),
+    });
+    if (res.ok) {
+      return await res.json();
+    }
+    const errData = await res.json().catch(() => ({}));
+    throw new Error(errData.error || `HTTP error ${res.status}`);
+  } catch (err: any) {
+    console.warn(`[AI Suite Client] Notice invoking ${action}:`, err?.message);
+    return { success: false, error: err?.message };
+  }
+}
+
+export async function getCpanelStatus(): Promise<{
+  success: boolean;
+  nodeVersion?: string;
+  platform?: string;
+  port?: number;
+  hasGeminiKey?: boolean;
+  maskedKey?: string;
+  uploadsDir?: string;
+  uploadsWritable?: boolean;
+  cpanelCompatibility?: {
+    supported: boolean;
+    recommendedNodeVersion: string;
+    serverEntryFile: string;
+    aiFeaturesFunctional: boolean;
+    aiBannerGeneratorFunctional: boolean;
+    canvasSynthesizerClientSide: boolean;
+    statusSummary: string;
+  };
+  error?: string;
+}> {
+  try {
+    const res = await fetch('/api/ai/cpanel-status');
+    if (res.ok) {
+      return await res.json();
+    }
+    throw new Error(`HTTP error ${res.status}`);
+  } catch (err: any) {
+    return {
+      success: false,
+      hasGeminiKey: false,
+      maskedKey: 'Not Set (Local Offline Fallbacks Active)',
+      uploadsWritable: true,
+      cpanelCompatibility: {
+        supported: true,
+        recommendedNodeVersion: 'v18.x or v20.x',
+        serverEntryFile: 'server.ts (or dist/server.js)',
+        aiFeaturesFunctional: true,
+        aiBannerGeneratorFunctional: true,
+        canvasSynthesizerClientSide: true,
+        statusSummary: 'Resilient Local Fallback Engine Active (Add GEMINI_API_KEY in cPanel for real-time generative models)',
+      },
+      error: err?.message,
+    };
   }
 }
 

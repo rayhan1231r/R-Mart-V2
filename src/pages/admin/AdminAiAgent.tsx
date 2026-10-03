@@ -21,6 +21,22 @@ import {
   AlertCircle,
   Loader2,
   ExternalLink,
+  ShieldAlert,
+  Megaphone,
+  MessageSquareText,
+  Calendar,
+  ShoppingCart,
+  Search,
+  Layers,
+  Calculator,
+  Gift,
+  Building2,
+  Scale,
+  BarChart3,
+  Tags,
+  Video,
+  Server,
+  Filter,
 } from 'lucide-react';
 import {
   getProducts,
@@ -35,10 +51,50 @@ import {
 } from '../../lib/store';
 import type { Product, Order, Category, SiteSettings } from '../../types';
 
+import { AiFraudDetector } from './ai-tools/AiFraudDetector';
+import { AiAdCampaignCreator } from './ai-tools/AiAdCampaignCreator';
+import { AiCustomerDisputeResolver } from './ai-tools/AiCustomerDisputeResolver';
+import { AiFestivalCampaignPlanner } from './ai-tools/AiFestivalCampaignPlanner';
+import { AiAbandonedCartRecovery } from './ai-tools/AiAbandonedCartRecovery';
+import { AiSeoSchemaGenerator } from './ai-tools/AiSeoSchemaGenerator';
+import { AiSmartBundlesUpsell } from './ai-tools/AiSmartBundlesUpsell';
+import { AiProfitReturnCalculator } from './ai-tools/AiProfitReturnCalculator';
+import { AiUnboxingNoteDrafter } from './ai-tools/AiUnboxingNoteDrafter';
+import { AiSupplierPurchaseOrder } from './ai-tools/AiSupplierPurchaseOrder';
+import { AiLegalPolicyDrafter } from './ai-tools/AiLegalPolicyDrafter';
+import { AiCompetitorAnalysis } from './ai-tools/AiCompetitorAnalysis';
+import { AiCategoryTaxonomy } from './ai-tools/AiCategoryTaxonomy';
+import { AiFbLiveScript } from './ai-tools/AiFbLiveScript';
+import { AiCpanelDeploymentGuide } from './ai-tools/AiCpanelDeploymentGuide';
+
+export type AiToolKey =
+  | 'copilot'
+  | 'product_gen'
+  | 'review_studio'
+  | 'email_broadcast'
+  | 'pricing_advisor'
+  | 'sms_drafter'
+  | 'stock_advisor'
+  | 'fraud_shield'
+  | 'ad_campaign'
+  | 'customer_dispute'
+  | 'festival_planner'
+  | 'abandoned_cart'
+  | 'seo_schema'
+  | 'smart_bundles'
+  | 'profit_calculator'
+  | 'unboxing_note'
+  | 'vendor_po'
+  | 'legal_policy'
+  | 'competitor_analysis'
+  | 'category_taxonomy'
+  | 'fb_live_script'
+  | 'cpanel_guide';
+
 export const AdminAiAgent: React.FC = () => {
-  const [activeTool, setActiveTool] = useState<
-    'copilot' | 'product_gen' | 'review_studio' | 'email_broadcast' | 'pricing_advisor' | 'sms_drafter' | 'stock_advisor'
-  >('copilot');
+  const [activeTool, setActiveTool] = useState<AiToolKey>('copilot');
+  const [categoryFilter, setCategoryFilter] = useState<'all' | 'risk' | 'marketing' | 'creative' | 'pricing' | 'legal' | 'cpanel'>('all');
+  const [searchQuery, setSearchQuery] = useState('');
 
   // Co-Pilot Chat
   const [chatMessages, setChatMessages] = useState<Array<{ sender: 'ai' | 'admin'; text: string; time: string }>>([
@@ -110,6 +166,48 @@ export const AdminAiAgent: React.FC = () => {
 
   // Tool 3: Stock Health Insights
   const lowStockItems = products.filter((p) => p.totalStock < 10);
+
+  const ALL_TOOLS: Array<{
+    id: AiToolKey;
+    label: string;
+    category: 'all' | 'risk' | 'marketing' | 'creative' | 'pricing' | 'legal' | 'cpanel';
+    icon: any;
+    badge?: string;
+    badgeColor?: string;
+    shortDesc: string;
+  }> = [
+    { id: 'copilot', label: 'Interactive AI Co-Pilot', category: 'creative', icon: Bot, shortDesc: 'Store chatbot assistant' },
+    { id: 'product_gen', label: 'Product Copy & SEO', category: 'creative', icon: FileText, shortDesc: 'Titles, descriptions & bullet points' },
+    { id: 'review_studio', label: 'AI Review Studio', category: 'creative', icon: Star, shortDesc: 'Authentic customer reviews' },
+    { id: 'email_broadcast', label: 'AI Email Broadcast', category: 'marketing', icon: Mail, shortDesc: 'Promotional newsletter campaign' },
+    { id: 'pricing_advisor', label: 'Smart Pricing & Margin', category: 'pricing', icon: DollarSign, shortDesc: 'MSRP & net profit advisor' },
+    { id: 'sms_drafter', label: 'Courier SMS / WhatsApp', category: 'risk', icon: MessageSquare, shortDesc: 'Dispatch notifications with tracking' },
+    { id: 'stock_advisor', label: 'Inventory Health Advisor', category: 'risk', icon: TrendingUp, shortDesc: 'Stock velocity & reorder alerts' },
+    { id: 'fraud_shield', label: 'COD Fraud & Risk Shield', category: 'risk', icon: ShieldAlert, badge: 'NEW', badgeColor: 'bg-amber-500 text-slate-950', shortDesc: 'Detect fake numbers & risky COD' },
+    { id: 'ad_campaign', label: 'Meta & TikTok Ads Creator', category: 'marketing', icon: Megaphone, badge: 'NEW', badgeColor: 'bg-indigo-500 text-white', shortDesc: 'Facebook, Insta & TikTok scripts' },
+    { id: 'customer_dispute', label: 'Dispute & Complaint Resolver', category: 'risk', icon: MessageSquareText, badge: 'NEW', badgeColor: 'bg-teal-500 text-white', shortDesc: 'Polite customer problem replies' },
+    { id: 'festival_planner', label: 'Festival Mega Campaign', category: 'marketing', icon: Calendar, badge: 'NEW', badgeColor: 'bg-rose-500 text-white', shortDesc: 'Eid, Boishakh & Winter sales' },
+    { id: 'abandoned_cart', label: 'Abandoned Cart Recovery', category: 'marketing', icon: ShoppingCart, badge: 'NEW', badgeColor: 'bg-cyan-500 text-slate-950', shortDesc: '3-stage WhatsApp & SMS recovery' },
+    { id: 'seo_schema', label: 'SEO Schema Rich Snippets', category: 'creative', icon: Search, badge: 'NEW', badgeColor: 'bg-sky-500 text-white', shortDesc: 'JSON-LD Structured Data & Tags' },
+    { id: 'smart_bundles', label: 'Smart Bundles & Combos', category: 'pricing', icon: Layers, badge: 'NEW', badgeColor: 'bg-purple-500 text-white', shortDesc: 'Frequently Bought Together packs' },
+    { id: 'profit_calculator', label: 'Net Profit & Return Loss', category: 'pricing', icon: Calculator, badge: 'NEW', badgeColor: 'bg-emerald-500 text-slate-950', shortDesc: 'True profit after return losses' },
+    { id: 'unboxing_note', label: 'Unboxing Thank-You Note', category: 'creative', icon: Gift, badge: 'NEW', badgeColor: 'bg-pink-500 text-white', shortDesc: 'Parcel box cards with repeat coupon' },
+    { id: 'vendor_po', label: 'Wholesale Supplier PO', category: 'pricing', icon: Building2, badge: 'NEW', badgeColor: 'bg-blue-500 text-white', shortDesc: 'Procurement requisition orders' },
+    { id: 'legal_policy', label: 'Legal Policies & Terms', category: 'legal', icon: Scale, badge: 'NEW', badgeColor: 'bg-amber-600 text-white', shortDesc: 'DNCRP compliant return & COD terms' },
+    { id: 'competitor_analysis', label: 'Competitor Benchmarking', category: 'pricing', icon: BarChart3, badge: 'NEW', badgeColor: 'bg-violet-500 text-white', shortDesc: 'Daraz vs Market price evaluation' },
+    { id: 'category_taxonomy', label: 'Category & Filter Tags', category: 'legal', icon: Tags, badge: 'NEW', badgeColor: 'bg-teal-600 text-white', shortDesc: 'Filters, attributes & search synonyms' },
+    { id: 'fb_live_script', label: 'Facebook Live Script', category: 'marketing', icon: Video, badge: 'NEW', badgeColor: 'bg-red-500 text-white', shortDesc: 'Live selling script & offer hooks' },
+    { id: 'cpanel_guide', label: 'cPanel Live Hosting Guide', category: 'cpanel', icon: Server, badge: 'PRO', badgeColor: 'bg-emerald-600 text-white', shortDesc: 'Live diagnostics & cPanel setup' },
+  ];
+
+  const filteredTools = ALL_TOOLS.filter((t) => {
+    const matchesCategory = categoryFilter === 'all' || t.category === categoryFilter;
+    const matchesSearch =
+      !searchQuery.trim() ||
+      t.label.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      t.shortDesc.toLowerCase().includes(searchQuery.toLowerCase());
+    return matchesCategory && matchesSearch;
+  });
 
   useEffect(() => {
     getProducts().then(setProducts);
@@ -352,91 +450,87 @@ R Mart Official Store (rmartoffcial.shop)`;
         </div>
       </div>
 
-      {/* Tool Navigation Tabs */}
-      <div className="flex flex-wrap gap-2 p-1.5 bg-slate-100 rounded-2xl border border-slate-200">
-        <button
-          onClick={() => setActiveTool('copilot')}
-          className={`flex items-center gap-2 px-4 py-2.5 rounded-xl font-bold text-xs sm:text-sm transition-all ${
-            activeTool === 'copilot'
-              ? 'bg-white text-slate-900 shadow-sm'
-              : 'text-slate-600 hover:text-slate-900'
-          }`}
-        >
-          <Bot className="w-4 h-4 text-emerald-600" />
-          <span>Interactive AI Co-Pilot</span>
-        </button>
+      {/* 22 AI Tools Command Bar & Category Filtering */}
+      <div className="space-y-3">
+        {/* Category Pills & Search */}
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-white p-3 rounded-2xl border border-slate-200 shadow-xs">
+          <div className="flex items-center gap-1.5 overflow-x-auto pb-1 sm:pb-0 scrollbar-none">
+            <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider px-2 flex items-center gap-1 shrink-0">
+              <Filter className="w-3.5 h-3.5" />
+              <span>Category:</span>
+            </span>
+            {[
+              { id: 'all', label: 'All 22 AI Tools' },
+              { id: 'risk', label: '🛡️ Risk & Courier' },
+              { id: 'marketing', label: '📢 Ads & Campaigns' },
+              { id: 'creative', label: '✍️ Copy & SEO' },
+              { id: 'pricing', label: '💰 Pricing & Bundles' },
+              { id: 'legal', label: '⚖️ Legal & Taxonomy' },
+              { id: 'cpanel', label: '🌐 cPanel Deployment' },
+            ].map((cat) => (
+              <button
+                key={cat.id}
+                onClick={() => setCategoryFilter(cat.id as any)}
+                className={`px-3 py-1.5 rounded-xl text-xs font-bold whitespace-nowrap transition-all cursor-pointer ${
+                  categoryFilter === cat.id
+                    ? 'bg-slate-900 text-white shadow-xs'
+                    : 'bg-slate-100 text-slate-600 hover:text-slate-900 hover:bg-slate-200'
+                }`}
+              >
+                {cat.label}
+              </button>
+            ))}
+          </div>
 
-        <button
-          onClick={() => setActiveTool('product_gen')}
-          className={`flex items-center gap-2 px-4 py-2.5 rounded-xl font-bold text-xs sm:text-sm transition-all ${
-            activeTool === 'product_gen'
-              ? 'bg-white text-slate-900 shadow-sm'
-              : 'text-slate-600 hover:text-slate-900'
-          }`}
-        >
-          <FileText className="w-4 h-4 text-emerald-600" />
-          <span>Product Copy & SEO</span>
-        </button>
+          <div className="relative shrink-0 sm:w-64">
+            <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+            <input
+              type="text"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              placeholder="Search 22 AI tools..."
+              className="w-full pl-8 pr-3 py-1.5 text-xs rounded-xl bg-slate-50 border border-slate-200 focus:outline-emerald-500 focus:bg-white"
+            />
+          </div>
+        </div>
 
-        <button
-          onClick={() => setActiveTool('review_studio')}
-          className={`flex items-center gap-2 px-4 py-2.5 rounded-xl font-bold text-xs sm:text-sm transition-all ${
-            activeTool === 'review_studio'
-              ? 'bg-white text-slate-900 shadow-sm'
-              : 'text-slate-600 hover:text-slate-900'
-          }`}
-        >
-          <Star className="w-4 h-4 text-emerald-600" />
-          <span>AI Review Studio</span>
-        </button>
-
-        <button
-          onClick={() => setActiveTool('email_broadcast')}
-          className={`flex items-center gap-2 px-4 py-2.5 rounded-xl font-bold text-xs sm:text-sm transition-all ${
-            activeTool === 'email_broadcast'
-              ? 'bg-white text-slate-900 shadow-sm'
-              : 'text-slate-600 hover:text-slate-900'
-          }`}
-        >
-          <Mail className="w-4 h-4 text-emerald-600" />
-          <span>AI Email Broadcast</span>
-        </button>
-
-        <button
-          onClick={() => setActiveTool('pricing_advisor')}
-          className={`flex items-center gap-2 px-4 py-2.5 rounded-xl font-bold text-xs sm:text-sm transition-all ${
-            activeTool === 'pricing_advisor'
-              ? 'bg-white text-slate-900 shadow-sm'
-              : 'text-slate-600 hover:text-slate-900'
-          }`}
-        >
-          <DollarSign className="w-4 h-4 text-emerald-600" />
-          <span>Smart Pricing & Margin</span>
-        </button>
-
-        <button
-          onClick={() => setActiveTool('sms_drafter')}
-          className={`flex items-center gap-2 px-4 py-2.5 rounded-xl font-bold text-xs sm:text-sm transition-all ${
-            activeTool === 'sms_drafter'
-              ? 'bg-white text-slate-900 shadow-sm'
-              : 'text-slate-600 hover:text-slate-900'
-          }`}
-        >
-          <MessageSquare className="w-4 h-4 text-emerald-600" />
-          <span>Courier SMS / WhatsApp</span>
-        </button>
-
-        <button
-          onClick={() => setActiveTool('stock_advisor')}
-          className={`flex items-center gap-2 px-4 py-2.5 rounded-xl font-bold text-xs sm:text-sm transition-all ${
-            activeTool === 'stock_advisor'
-              ? 'bg-white text-slate-900 shadow-sm'
-              : 'text-slate-600 hover:text-slate-900'
-          }`}
-        >
-          <TrendingUp className="w-4 h-4 text-emerald-600" />
-          <span>Inventory Health & Reorder Advisor</span>
-        </button>
+        {/* Responsive Grid Tool Selector */}
+        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-2">
+          {filteredTools.map((tool) => {
+            const Icon = tool.icon;
+            const isActive = activeTool === tool.id;
+            return (
+              <button
+                key={tool.id}
+                onClick={() => setActiveTool(tool.id)}
+                className={`flex flex-col items-start text-left p-3 rounded-2xl border transition-all cursor-pointer relative ${
+                  isActive
+                    ? 'bg-white border-emerald-500 text-slate-900 shadow-md ring-2 ring-emerald-500/20'
+                    : 'bg-white border-slate-200 text-slate-600 hover:border-slate-300 hover:bg-slate-50/80 shadow-2xs'
+                }`}
+              >
+                {tool.badge && (
+                  <span
+                    className={`absolute top-2 right-2 text-[9px] font-extrabold px-1.5 py-0.5 rounded-full ${
+                      tool.badgeColor || 'bg-emerald-500 text-white'
+                    }`}
+                  >
+                    {tool.badge}
+                  </span>
+                )}
+                <div
+                  className={`w-7 h-7 rounded-xl flex items-center justify-center mb-2 ${
+                    isActive ? 'bg-emerald-500 text-slate-950 font-bold' : 'bg-slate-100 text-slate-700'
+                  }`}
+                >
+                  <Icon className="w-4 h-4" />
+                </div>
+                <span className="text-xs font-bold text-slate-900 leading-tight line-clamp-1">{tool.label}</span>
+                <span className="text-[10px] text-slate-400 line-clamp-1 mt-0.5">{tool.shortDesc}</span>
+              </button>
+            );
+          })}
+        </div>
       </div>
 
       {/* Tab 1: Interactive AI Co-Pilot */}
@@ -1241,6 +1335,23 @@ R Mart Official Store (rmartoffcial.shop)`;
           )}
         </div>
       )}
+
+      {/* 15 New Specialized AI Features */}
+      {activeTool === 'fraud_shield' && <AiFraudDetector />}
+      {activeTool === 'ad_campaign' && <AiAdCampaignCreator />}
+      {activeTool === 'customer_dispute' && <AiCustomerDisputeResolver />}
+      {activeTool === 'festival_planner' && <AiFestivalCampaignPlanner />}
+      {activeTool === 'abandoned_cart' && <AiAbandonedCartRecovery />}
+      {activeTool === 'seo_schema' && <AiSeoSchemaGenerator />}
+      {activeTool === 'smart_bundles' && <AiSmartBundlesUpsell />}
+      {activeTool === 'profit_calculator' && <AiProfitReturnCalculator />}
+      {activeTool === 'unboxing_note' && <AiUnboxingNoteDrafter />}
+      {activeTool === 'vendor_po' && <AiSupplierPurchaseOrder />}
+      {activeTool === 'legal_policy' && <AiLegalPolicyDrafter />}
+      {activeTool === 'competitor_analysis' && <AiCompetitorAnalysis />}
+      {activeTool === 'category_taxonomy' && <AiCategoryTaxonomy />}
+      {activeTool === 'fb_live_script' && <AiFbLiveScript />}
+      {activeTool === 'cpanel_guide' && <AiCpanelDeploymentGuide />}
     </div>
   );
 };

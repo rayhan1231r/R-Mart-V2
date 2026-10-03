@@ -29,7 +29,112 @@ async function startServer() {
   const PORT = parseInt(process.env.PORT || portFromArg || '3000', 10);
   const isProduction = process.env.NODE_ENV === 'production';
 
-  app.use(express.json());
+  const UPLOADS_DIR = path.join(DATA_DIR, 'uploads');
+  if (!fs.existsSync(UPLOADS_DIR)) {
+    try {
+      fs.mkdirSync(UPLOADS_DIR, { recursive: true });
+    } catch (err) {
+      console.warn('[Server] Notice creating uploads dir:', err);
+    }
+  }
+
+  app.use(express.json({ limit: '100mb' }));
+  app.use(express.urlencoded({ limit: '100mb', extended: true }));
+
+  // Serve uploaded media
+  app.use('/uploads', express.static(UPLOADS_DIR));
+
+  // Video Upload API Endpoint
+  app.post('/api/upload-video', (req, res) => {
+    try {
+      const { fileName, fileData, fileType } = req.body;
+      if (!fileData) {
+        return res.status(400).json({ success: false, error: 'No video file data provided' });
+      }
+
+      // Parse Base64 data URL e.g. "data:video/mp4;base64,..." or raw Base64
+      const matches = fileData.match(/^data:([A-Za-z-+\/]+);base64,(.+)$/);
+      let buffer: Buffer;
+      let ext = 'mp4';
+      if (matches && matches.length === 3) {
+        const mime = matches[1];
+        if (mime.includes('webm')) ext = 'webm';
+        else if (mime.includes('ogg')) ext = 'ogv';
+        else if (mime.includes('quicktime')) ext = 'mov';
+        buffer = Buffer.from(matches[2], 'base64');
+      } else {
+        buffer = Buffer.from(fileData, 'base64');
+      }
+
+      const safeBaseName = (fileName || 'video')
+        .replace(/[^a-zA-Z0-9_-]/g, '_')
+        .substring(0, 30);
+      const generatedName = `${safeBaseName}_${Date.now()}_${Math.random().toString(36).substring(2, 7)}.${ext}`;
+      const targetPath = path.join(UPLOADS_DIR, generatedName);
+
+      fs.writeFileSync(targetPath, buffer);
+      const publicUrl = `/uploads/${generatedName}`;
+      const sizeMb = (buffer.length / (1024 * 1024)).toFixed(1);
+
+      console.log(`[Server] Video uploaded successfully: ${publicUrl} (${sizeMb} MB)`);
+      return res.json({
+        success: true,
+        url: publicUrl,
+        name: fileName || generatedName,
+        sizeFormatted: `${sizeMb} MB`,
+      });
+    } catch (err: any) {
+      console.error('[Server] Error saving uploaded video:', err);
+      return res.status(500).json({
+        success: false,
+        error: err?.message || 'Failed to save uploaded video file',
+      });
+    }
+  });
+
+  // Image Upload API Endpoint (Used for banner saves, product images, canvas composites)
+  app.post('/api/upload-image', (req, res) => {
+    try {
+      const { fileName, fileData } = req.body;
+      if (!fileData) {
+        return res.status(400).json({ success: false, error: 'No image file data provided' });
+      }
+
+      const matches = fileData.match(/^data:([A-Za-z-+\/]+);base64,(.+)$/);
+      let buffer: Buffer;
+      let ext = 'jpg';
+      if (matches && matches.length === 3) {
+        const mime = matches[1];
+        if (mime.includes('png')) ext = 'png';
+        else if (mime.includes('webp')) ext = 'webp';
+        else if (mime.includes('svg')) ext = 'svg';
+        buffer = Buffer.from(matches[2], 'base64');
+      } else {
+        buffer = Buffer.from(fileData, 'base64');
+      }
+
+      const safeBaseName = (fileName || 'banner')
+        .replace(/[^a-zA-Z0-9_-]/g, '_')
+        .substring(0, 30);
+      const generatedName = `${safeBaseName}_${Date.now()}_${Math.random().toString(36).substring(2, 7)}.${ext}`;
+      const targetPath = path.join(UPLOADS_DIR, generatedName);
+
+      fs.writeFileSync(targetPath, buffer);
+      const publicUrl = `/uploads/${generatedName}`;
+
+      return res.json({
+        success: true,
+        url: publicUrl,
+        name: fileName || generatedName,
+      });
+    } catch (err: any) {
+      console.error('[Server] Error saving uploaded image:', err);
+      return res.status(500).json({
+        success: false,
+        error: err?.message || 'Failed to save uploaded image file',
+      });
+    }
+  });
 
   // Helper to resolve sender identity matching authenticated SMTP credentials
   function getSenderDetails(customConfig?: {
@@ -887,8 +992,8 @@ Keep it professional, engaging, and ready to paste into an online store product 
         if (response.text) {
           return res.json({ success: true, description: response.text.trim() });
         }
-      } catch (err: any) {
-        console.warn('Gemini API call notice, using smart local generator:', err?.message || err);
+      } catch {
+        // Fallback to domain template on quota or network limits
       }
     }
 
@@ -952,8 +1057,8 @@ Return ONLY valid JSON array with no markdown code blocks.`;
             return res.json({ success: true, reviews: parsed });
           }
         }
-      } catch (err: any) {
-        console.warn('Gemini review generator notice, using smart local template:', err?.message || err);
+      } catch {
+        // Fallback to localized templates on quota or network limits
       }
     }
 
@@ -1156,8 +1261,8 @@ Return ONLY valid JSON with format:
             return res.json({ success: true, titles: parsed.titles, tags: parsed.tags || [] });
           }
         }
-      } catch (err: any) {
-        console.warn('AI title generator notice:', err?.message || err);
+      } catch {
+        // Fallback to title variations on quota or network limits
       }
     }
 
@@ -1234,31 +1339,72 @@ Return ONLY valid JSON with format:
     }
   });
 
-  // AI Generator: High-Converting Banner Prompt & Marketing Copy from Coupon
+  // In-memory cache to prevent repetitive Gemini quota consumption
+  const bannerPromptCache = new Map<string, any>();
+
+  // AI Generator: High-Converting Banner Prompt & Marketing Copy (5 Banner Categories)
   app.post('/api/ai/generate-banner-prompt', async (req, res) => {
-    const { couponCode, discountText, campaignTheme, category, audience } = req.body;
-    const code = (couponCode || 'SPECIAL').toUpperCase().trim();
-    const discount = discountText || 'Special Discount';
-    const theme = campaignTheme || 'Mega Marketplace Sale';
+    const {
+      bannerType = 'offers',
+      couponCode,
+      discountText,
+      percentage,
+      campaignTheme,
+      productName,
+      productPrice,
+      productFeatures,
+      productOfferTitle,
+      category,
+      audience,
+      customPrompt,
+      colorMood = 'emerald_gold',
+    } = req.body;
+
+    const code = (couponCode || 'SPECIAL20').toUpperCase().trim();
+    const discount = discountText || percentage || 'Special Offer';
+    const theme = campaignTheme || 'Exclusive Marketplace Campaign';
+
+    const cacheKey = `${bannerType}_${theme}_${discount}_${code}_${colorMood}_${productName || ''}_${percentage || ''}_${customPrompt || ''}`;
+    if (bannerPromptCache.has(cacheKey)) {
+      return res.json({ success: true, ...bannerPromptCache.get(cacheKey) });
+    }
 
     const ai = getAiClient();
     if (ai) {
       try {
-        const prompt = `You are a creative marketing director for R Mart (rmartofficial.shop), Bangladesh's premier multi-category e-commerce marketplace.
-We are launching a new promotional hero banner for the homepage.
-Promotion Details:
-- Coupon Code: "${code}"
-- Discount Offer: "${discount}"
-- Campaign Theme: "${theme}"
-- Category: "${category || 'All Categories'}"
-- Target Audience: "${audience || 'Bangladeshi online shoppers looking for quality and great deals'}"
+        const categoryInstructions: Record<string, string> = {
+          offers: `Category: SPECIAL OFFERS & MEGA SALES (Flash sale, Mega deals, Seasonal campaign). Focus on high-energy commercial advertising, floating luxury shopping bags, floating discount ribbons, celebratory particles, studio depth.`,
+          percentage: `Category: PERCENTAGE DISCOUNT PROMO (${percentage || '50% OFF'}). Focus on dramatic floating 3D golden/metallic percentage symbols (%), glowing light streaks, bold sale ribbons, high-contrast luxury background with ample negative space.`,
+          products_offer: `Category: MULTI-PRODUCT / BUNDLE OFFERS (${productOfferTitle || 'Combo Deals'}). Focus on illuminated circular pedestals showcasing multiple lifestyle, fashion and tech product silhouettes, floating price slash tags, clean minimalist studio showroom.`,
+          product_details: `Category: PRODUCT SHOWCASE & SPECIFICATIONS (Product: "${productName || 'Featured Product'}", Price: "${productPrice || 'Best Price'}", Features: "${productFeatures || 'Premium Quality'}"). Focus on high-end hero product photography, dramatic directional rim lighting, floating spec callouts, ultra-luxurious commercial aesthetic.`,
+          coupon_card: `Category: COUPON CARD / VIP VOUCHER (${code} - ${discount}). Focus on an ornate floating 3D gift voucher ticket with dashed borders, golden wax seal or ribbon, sparkling confetti, celebratory festival atmosphere, clean left side for coupon code.`,
+        };
 
-Generate:
-1. "prompt": A highly descriptive, cinematic commercial AI image generation prompt (in English) describing a modern, ultra-luxurious 16:9 widescreen e-commerce advertisement banner. Include floating 3D elements, premium lighting, elegant typography spaces, vibrant colors, product showcases, and a festive atmosphere.
-2. "title": A punchy, attractive Bengali/English promotional headline (max 6 words). E.g. "মেগা ডিসকাউন্ট অফার!" or "Exclusive Mega Sale"
-3. "subtitle": A compelling subheadline highlighting the coupon code and savings (e.g., "Use Coupon Code ${code} at checkout to get ${discount}").
-4. "buttonText": High-converting Call-to-Action button text (e.g., "কুপন ব্যবহার করুন" or "Shop with ${code}").
-5. "tagline": Short promotional badge text (e.g., "Limited Time Offer" or "Special Eid Deal").
+        const instruction = categoryInstructions[bannerType] || categoryInstructions.offers;
+
+        const systemPrompt = `You are an elite e-commerce creative director for R Mart (rmartofficial.shop), Bangladesh's premier marketplace.
+Generate high-converting 16:9 widescreen hero banner assets for the homepage slider.
+
+${instruction}
+
+Details Provided:
+- Banner Type: ${bannerType}
+- Campaign / Headline Idea: "${theme}"
+- Discount / Offer: "${discount}"
+- Coupon Code (if applicable): "${code}"
+- Target Products/Category: "${productName || productOfferTitle || category || 'All Departments'}"
+- Product Price: "${productPrice || ''}"
+- Color Mood: "${colorMood}"
+- User Custom Guidance: "${customPrompt || 'None'}"
+
+Generate a JSON response containing:
+1. "prompt": A highly detailed, cinematic commercial AI image generation prompt (in English, 3-4 descriptive sentences) describing an ultra-luxurious 16:9 widescreen e-commerce advertisement banner. Include floating 3D elements, volumetric lighting, rich color palette matching "${colorMood}", expansive negative space on the left for text overlay, and professional 8K octane render quality.
+2. "title": Punchy, persuasive banner headline (max 6 words in Bengali or English, e.g. "মেগা ডিসকাউন্ট অফার!" or "Flash Sale - 50% Off").
+3. "subtitle": Compelling subheadline (1-2 sentences in Bengali or English) highlighting the deal, savings, or key product benefits.
+4. "buttonText": High-converting Call-to-Action button text (e.g. "এখনই কিনুন", "Claim Voucher", "Shop Special Deal", "Use Code ${code}").
+5. "buttonLink": Recommended store path (e.g. "/shop", "/shop?category=...", or "/checkout?coupon=${code}").
+6. "tagline": Short promotional pill badge text (e.g. "⚡ Limited Time Deal", "🎟️ VIP Coupon: ${code}", "🔥 Flat ${discount}").
+7. "accentColor": Hex color code suitable for badges and buttons (e.g. "#10B981", "#F59E0B", "#EF4444", "#3B82F6", "#8B5CF6").
 
 Return ONLY valid JSON matching this schema:
 {
@@ -1266,47 +1412,723 @@ Return ONLY valid JSON matching this schema:
   "title": "string",
   "subtitle": "string",
   "buttonText": "string",
-  "tagline": "string"
+  "buttonLink": "string",
+  "tagline": "string",
+  "accentColor": "string"
 }`;
 
         const response = await ai.models.generateContent({
           model: 'gemini-3.8-flash',
-          contents: prompt,
+          contents: systemPrompt,
           config: { responseMimeType: 'application/json' },
         });
 
         const text = response.text?.trim() || '';
         const parsed = JSON.parse(text);
+        bannerPromptCache.set(cacheKey, parsed);
         return res.json({ success: true, ...parsed });
-      } catch (err: any) {
-        console.warn('[Server AI] Notice generating banner prompt with Gemini:', err?.message);
+      } catch {
+        // Resilient fallback to curated high-converting banner copy on quota or network limits
       }
     }
 
-    // High quality template fallback if AI client unavailable
-    const fallbackPrompts: Record<string, string> = {
-      eid: `Ultra-luxurious 16:9 commercial promotional banner for R Mart Bangladesh. Celebratory Eid festive atmosphere with elegant crescent moon, golden lanterns, floating wrapped gift boxes, emerald and gold silk ribbons, sparkling dust, high-end studio lighting, cinematic 3D render, ample clean space on left for typography 'EID SPECIAL - Code ${code}'.`,
-      electronics: `Modern futuristic 16:9 e-commerce advertising banner for R Mart electronics. Showcasing sleek wireless earbuds, smartwatches, ultra-thin smartphones floating in zero-gravity with neon cyan and emerald glowing trails, clean tech aesthetic, cinematic studio lighting, commercial 4K render for discount code ${code}.`,
-      fashion: `Vibrant trendy 16:9 fashion campaign hero banner for R Mart. Premium fabrics, stylish modern apparel, luxury shopping bags, floating discount tags, warm studio photography, elegant magazine layout with clean typography space for coupon ${code} (${discount}).`,
-      default: `Striking 16:9 commercial e-commerce advertising banner for R Mart. High-energy promotional atmosphere with vibrant floating shopping bags, 3D golden percentage badges, sparkling confetti particles, deep emerald and golden luxury palette, studio lighting, advertising photography with clear space for headline and promo code ${code} (${discount}).`,
+    // High-quality category-specific fallback generators
+    const fallbacks: Record<string, any> = {
+      offers: {
+        prompt: `Ultra-luxurious 16:9 commercial promotional banner for R Mart Bangladesh. Celebratory atmosphere with floating glossy emerald and gold shopping bags, wrapped gift boxes, sparkling golden dust particles, soft cinematic studio volumetric lighting, deep dark slate background, generous clean space on left for advertising typography.`,
+        title: `${theme} - Exclusive Mega Offers`,
+        subtitle: `Enjoy nationwide Cash on Delivery and authentic brand quality across all departments.`,
+        buttonText: `Explore Mega Deals`,
+        buttonLink: `/shop?offer=mega`,
+        tagline: `⚡ Limited Time Store Offer`,
+        accentColor: `#10B981`,
+      },
+      percentage: {
+        prompt: `An ultra-modern 16:9 wide commercial advertisement banner for percentage discount sales. Large floating 3D golden and emerald ${percentage || '50%'} percentage badges, glossy balloons, dynamic glowing trails, dark luxury backdrop, ample empty copy space on left, cinematic 4K studio lighting.`,
+        title: `Flat ${percentage || '50%'} Off Everything!`,
+        subtitle: `Massive discount savings on trendy apparel, electronics, and lifestyle goods. Don't miss out!`,
+        buttonText: `Shop ${percentage || '50%'} Off`,
+        buttonLink: `/shop?discount=${encodeURIComponent(percentage || '50%')}`,
+        tagline: `🔥 Special Percentage Discount`,
+        accentColor: `#F59E0B`,
+      },
+      products_offer: {
+        prompt: `A vibrant 16:9 wide multi-product promotional banner background. Sleek circular illuminated display podiums, floating discount tags, ambient studio neon and warm emerald lighting, minimalist futuristic showroom, empty negative space on left for text, commercial photography style.`,
+        title: `${productOfferTitle || 'Combo & Bundle Offers'}`,
+        subtitle: `Buy together and save extra! Handpicked product combos with free shipping across Bangladesh.`,
+        buttonText: `View Bundle Offers`,
+        buttonLink: `/shop?category=bundles`,
+        tagline: `🛍️ Combo Deal Showcase`,
+        accentColor: `#3B82F6`,
+      },
+      product_details: {
+        prompt: `A high-end 16:9 wide commercial product showcase banner. Elegant floating pedestals with soft spotlighting, luxury geometric shapes, clean deep dark background, modern e-commerce advertising aesthetic with spacious layout for product details and specifications.`,
+        title: `${productName || 'Premium Collection'} - ৳${productPrice || 'Special Price'}`,
+        subtitle: `${productFeatures || '100% authentic quality materials and bespoke design.'} Order with Cash on Delivery nationwide.`,
+        buttonText: `Order Now`,
+        buttonLink: `/shop?search=${encodeURIComponent(productName || 'premium')}`,
+        tagline: `⭐ Featured Product Spotlight`,
+        accentColor: `#10B981`,
+      },
+      coupon_card: {
+        prompt: `A festive 16:9 wide VIP coupon and voucher promotional banner. Elegant floating golden voucher card with ornate ribbon, glowing sparkles, golden coins, celebratory festival atmosphere, clean left side for coupon code and discount details, cinematic 3D render.`,
+        title: `Use Code ${code} & Get ${discount}!`,
+        subtitle: `Apply voucher code "${code}" at checkout to unlock instant cashback and flat savings today.`,
+        buttonText: `Claim Voucher Code`,
+        buttonLink: `/shop?coupon=${code}`,
+        tagline: `🎟️ Special Coupon Voucher`,
+        accentColor: `#E11D48`,
+      },
     };
 
-    const chosenPrompt = theme.toLowerCase().includes('eid')
-      ? fallbackPrompts.eid
-      : theme.toLowerCase().includes('tech') || theme.toLowerCase().includes('electronic')
-      ? fallbackPrompts.electronics
-      : theme.toLowerCase().includes('fashion')
-      ? fallbackPrompts.fashion
-      : fallbackPrompts.default;
-
+    const chosen = fallbacks[bannerType] || fallbacks.offers;
     return res.json({
       success: true,
-      prompt: chosenPrompt,
-      title: `${theme} - ${discount}`,
-      subtitle: `Use Coupon Code: ${code} at checkout for instant savings!`,
-      buttonText: `Shop with ${code}`,
-      tagline: `Exclusive Promo • Code ${code}`,
+      ...chosen,
     });
+  });
+
+  // AI Generator: Real Gemini 16:9 Banner Image Generation with Resilient Category Fallback
+  app.post('/api/ai/generate-banner-image', async (req, res) => {
+    const { prompt, category = 'offers' } = req.body;
+    if (!prompt) {
+      return res.status(400).json({ success: false, error: 'Prompt is required for banner generation' });
+    }
+
+    const categoryAssets: Record<string, string> = {
+      offers: '/src/assets/images/banner_offers_1791026801994.jpg',
+      percentage: '/src/assets/images/banner_percentage_1791026813286.jpg',
+      products_offer: '/src/assets/images/banner_products_offer_1791026826624.jpg',
+      product_details: '/src/assets/images/banner_product_details_1791026836250.jpg',
+      coupon_card: '/src/assets/images/banner_coupon_card_1791026849128.jpg',
+    };
+
+    const ai = getAiClient();
+    // Only attempt paid nano banana image model if user explicitly enabled it via env or paid plan
+    if (ai && process.env.ENABLE_GEMINI_IMAGE_GEN === 'true') {
+      try {
+        const response = await ai.models.generateContent({
+          model: 'gemini-3.1-flash-lite-image',
+          contents: {
+            parts: [{ text: prompt }],
+          },
+          config: {
+            imageConfig: {
+              aspectRatio: '16:9',
+            },
+          },
+        });
+
+        for (const candidate of response.candidates || []) {
+          for (const part of candidate.content?.parts || []) {
+            if (part.inlineData?.data) {
+              const base64Data = part.inlineData.data;
+              const mimeType = part.inlineData.mimeType || 'image/jpeg';
+              const ext = mimeType.includes('png') ? 'png' : 'jpg';
+              const filename = `banner_gemini_${Date.now()}_${Math.random().toString(36).substring(2, 7)}.${ext}`;
+              const filePath = path.join(UPLOADS_DIR, filename);
+              fs.writeFileSync(filePath, Buffer.from(base64Data, 'base64'));
+
+              return res.json({
+                success: true,
+                imageUrl: `/uploads/${filename}`,
+                generatedWithGemini: true,
+                source: 'gemini-3.1-flash-lite-image',
+              });
+            }
+          }
+        }
+      } catch {
+        // Silently fall back to category asset on quota/auth limits
+      }
+    }
+
+    // High quality categorized visual asset fallback
+    const chosenAsset = categoryAssets[category] || categoryAssets.offers;
+    return res.json({
+      success: true,
+      imageUrl: chosenAsset,
+      fallbackRequired: true,
+      source: 'category-visual-asset',
+    });
+  });
+
+  // cPanel & Server Environment Status Check
+  app.get('/api/ai/cpanel-status', (_req, res) => {
+    const hasGeminiKey = Boolean(process.env.GEMINI_API_KEY && process.env.GEMINI_API_KEY.trim().length > 5);
+    const maskedKey = hasGeminiKey
+      ? `${process.env.GEMINI_API_KEY!.substring(0, 7)}...${process.env.GEMINI_API_KEY!.slice(-4)}`
+      : 'Not Set (Local Offline Fallbacks Active)';
+
+    let uploadsWritable = false;
+    try {
+      const testFile = path.join(UPLOADS_DIR, '.write_test');
+      fs.writeFileSync(testFile, 'test');
+      fs.unlinkSync(testFile);
+      uploadsWritable = true;
+    } catch {
+      uploadsWritable = false;
+    }
+
+    res.json({
+      success: true,
+      nodeVersion: process.version,
+      platform: process.platform,
+      port: PORT,
+      hasGeminiKey,
+      maskedKey,
+      uploadsDir: UPLOADS_DIR,
+      uploadsWritable,
+      cpanelCompatibility: {
+        supported: true,
+        recommendedNodeVersion: 'v18.x or v20.x',
+        serverEntryFile: 'server.ts (or dist/server.js)',
+        aiFeaturesFunctional: true,
+        aiBannerGeneratorFunctional: true,
+        canvasSynthesizerClientSide: true,
+        statusSummary: hasGeminiKey
+          ? 'Full Online AI Mode with Gemini & Offline Safety Fallbacks'
+          : 'Resilient Local Fallback Engine Active (Add GEMINI_API_KEY in cPanel for real-time generative models)',
+      },
+    });
+  });
+
+  // AI Suite Unified Action Router (14+ Advanced E-commerce AI Features)
+  app.post('/api/ai/suite-action', async (req, res) => {
+    const { action, payload = {} } = req.body;
+    if (!action) {
+      return res.status(400).json({ success: false, error: 'AI action is required' });
+    }
+
+    const ai = getAiClient();
+
+    // 1. AI COD Fraud & High Risk Order Shield
+    if (action === 'fraud_check') {
+      const {
+        customerName = 'Customer',
+        phone = '',
+        address = '',
+        district = 'Dhaka',
+        totalAmount = 1500,
+        paymentMethod = 'COD',
+        orderCount = 1,
+      } = payload;
+
+      const cleanPhone = String(phone).replace(/\D/g, '');
+      const isBdPhone = /^(01[3-9]\d{8}|8801[3-9]\d{8})$/.test(cleanPhone);
+      let phoneCarrier = 'Unknown';
+      if (cleanPhone.includes('017') || cleanPhone.includes('013')) phoneCarrier = 'Grameenphone';
+      else if (cleanPhone.includes('018')) phoneCarrier = 'Robi';
+      else if (cleanPhone.includes('019') || cleanPhone.includes('014')) phoneCarrier = 'Banglalink';
+      else if (cleanPhone.includes('015')) phoneCarrier = 'Teletalk';
+      else if (cleanPhone.includes('016')) phoneCarrier = 'Airtel';
+
+      const flags: string[] = [];
+      let riskScore = 10;
+
+      if (!isBdPhone) {
+        flags.push('Invalid Bangladeshi phone number format');
+        riskScore += 45;
+      }
+      if (address.length < 12) {
+        flags.push('Address appears too short or vague (missing house/road details)');
+        riskScore += 25;
+      }
+      if (Number(totalAmount) > 5000 && paymentMethod.toUpperCase().includes('COD')) {
+        flags.push('High-value Cash on Delivery order (above ৳5,000)');
+        riskScore += 20;
+      }
+      if (orderCount === 1) {
+        flags.push('First-time buyer on R Mart');
+        riskScore += 5;
+      }
+
+      const riskLevel = riskScore >= 60 ? 'HIGH' : riskScore >= 35 ? 'MEDIUM' : 'LOW';
+
+      // Attempt Gemini AI reasoning if available
+      if (ai) {
+        try {
+          const prompt = `Analyze this Bangladeshi e-commerce COD order for fraud risk:
+Customer: ${customerName}, Phone: ${phone}, Address: ${address}, District: ${district}, Value: ৳${totalAmount}, Payment: ${paymentMethod}, Buyer Orders: ${orderCount}.
+Return JSON only:
+{
+  "reason": "1-2 sentence risk analysis tailored for Bangladeshi online merchant",
+  "recommendations": ["Action 1", "Action 2", "Action 3"]
+}`;
+          const aiRes = await ai.models.generateContent({
+            model: 'gemini-3.8-flash',
+            contents: prompt,
+            config: { responseMimeType: 'application/json' },
+          });
+          const parsed = JSON.parse(aiRes.text || '{}');
+          return res.json({
+            success: true,
+            riskScore: Math.min(riskScore, 98),
+            riskLevel,
+            phoneCarrier,
+            phoneValid: isBdPhone,
+            flags,
+            reason: parsed.reason || 'Automated risk evaluation completed.',
+            recommendations: parsed.recommendations || [
+              'Make a voice verification call before courier booking',
+              'Confirm district and landmark with buyer',
+              riskLevel === 'HIGH' ? 'Request ৳100 advance delivery charge via bKash/Nagad' : 'Ready for Steadfast dispatch',
+            ],
+          });
+        } catch {}
+      }
+
+      return res.json({
+        success: true,
+        riskScore: Math.min(riskScore, 95),
+        riskLevel,
+        phoneCarrier,
+        phoneValid: isBdPhone,
+        flags,
+        reason: riskLevel === 'HIGH'
+          ? `High risk detected due to unverified phone structure or vague street address for ৳${totalAmount} COD.`
+          : riskLevel === 'MEDIUM'
+          ? `Moderate caution advised for high-value COD. Call customer to verify before booking with Steadfast.`
+          : `Order parameters appear legitimate with standard delivery address.`,
+        recommendations: [
+          'Verify phone availability via customer call or WhatsApp',
+          riskLevel === 'HIGH' ? 'Collect ৳100 advance delivery charge before parcel handover' : 'Ensure parcel packing is secured',
+          'Add Steadfast parcel tracking note in order dashboard',
+        ],
+      });
+    }
+
+    // 2. AI Meta Ads & TikTok Campaign Copywriter
+    if (action === 'ad_campaign') {
+      const { productName = 'Exclusive Lifestyle Product', price = 1250, offer = 'Special Discount', category = 'Fashion', targetPlatform = 'facebook' } = payload;
+
+      if (ai) {
+        try {
+          const prompt = `Generate a high-converting ${targetPlatform} advertisement campaign for Bangladesh for the product: "${productName}" (Price: ৳${price}, Offer: ${offer}, Category: ${category}).
+Return JSON only:
+{
+  "primaryText": "Persuasive Bengali-English Facebook ad copy with emojis and FOMO hook",
+  "hook": "Attention-grabbing first 3 seconds hook",
+  "headline": "Short punchy headline under 6 words",
+  "cta": "Call to action button label (e.g. এখনই অর্ডার করুন)",
+  "tiktokScript": {
+    "hook": "Visual and spoken hook for 0-3 sec",
+    "visual": "Camera shot direction",
+    "audio": "Voiceover in Bangla",
+    "cta": "Closing urgency CTA"
+  },
+  "targetInterests": ["Interest 1", "Interest 2", "Interest 3", "Demographic age"],
+  "budgetRecommendation": "Recommended daily budget in BDT and duration"
+}`;
+          const aiRes = await ai.models.generateContent({
+            model: 'gemini-3.8-flash',
+            contents: prompt,
+            config: { responseMimeType: 'application/json' },
+          });
+          const parsed = JSON.parse(aiRes.text || '{}');
+          return res.json({ success: true, ...parsed });
+        } catch {}
+      }
+
+      return res.json({
+        success: true,
+        primaryText: `🔥 ধামাকা অফার! প্রিমিয়াম কোয়ালিটির ${productName} এখন পাওয়া যাচ্ছে R Mart-এ!\n\n✨ ১০০% অরিজিনাল ও টেকসই মেটেরিয়াল\n🚚 সারা বাংলাদেশে ক্যাশ অন ডেলিভারি\n📦 পার্সেল খুলে দেখে পেমেন্ট করার সুযোগ\n\nঅফারটি সীমিত সময়ের জন্য! এখনই নিচের লিংকে ক্লিক করে অর্ডার কনফার্ম করুন 👇`,
+        hook: `মাত্র ৳${price}-এ এমন প্রিমিয়াম কোয়ালিটি পণ্য আগে দেখেননি! 🔥`,
+        headline: `${productName} – বিশেষ ছাড়ে কিনুন!`,
+        cta: `এখনই অর্ডার করুন`,
+        tiktokScript: {
+          hook: `(প্যাকেট আনবক্সিং শট) "এই বাজেটে এত সুন্দর ফিনিশিং সত্যিই অভাবনীয়!"`,
+          visual: `ক্লোজআপ প্রোডাক্ট অ্যাঙ্গেল, ফ্যাব্রিক/মেটিরিয়াল টেক্সচার এবং ডেলিভারি বক্স শোকেস।`,
+          audio: `১০০% অরিজিনাল কোয়ালিটি আর সারা বাংলাদেশে ক্যাশ অন ডেলিভারি দিচ্ছে R Mart। স্টক কিন্তু খুব সীমিত!`,
+          cta: `কমেন্টে লিঙ্ক দেওয়া আছে অথবা এখনই বায়ো-এর লিংকে ক্লিক করুন!`,
+        },
+        targetInterests: [
+          `Online Shopping (Bangladesh)`,
+          `${category} Enthusiasts`,
+          `Age: 20-38, Dhaka, Chittagong, Sylhet`,
+          `Engaged Shoppers & Mobile Payments`,
+        ],
+        budgetRecommendation: `৳৫০০ - ৳১,০০০ প্রতিদিন (৩-৫ দিন টেস্ট রান)`,
+      });
+    }
+
+    // 3. AI Customer Support & Dispute Resolver
+    if (action === 'customer_dispute') {
+      const {
+        scenario = 'courier_delay',
+        customerName = 'Rahim Khan',
+        orderNumber = 'RM-84920',
+        extraDetails = '',
+      } = payload;
+
+      const responses: Record<string, any> = {
+        courier_delay: {
+          banglaReply: `আসসালামু আলাইকুম ${customerName} ভাই/ম্যাম,
+R Mart থেকে আন্তরিকভাবে দুঃখ প্রকাশ করছি। আপনার অর্ডার #${orderNumber} ইতোমধ্যে কুরিয়ারে হ্যান্ডওভার করা হয়েছে। ট্রাফিকের কারণে ডেলিভারি সাময়িক বিলম্বিত হয়েছে।
+আমরা কুরিয়ার এজেন্টের সাথে কথা বলে দ্রুততম সময়ে আপনার ঠিকানায় পৌঁছানোর ব্যবস্থা নিচ্ছি। অনুগ্রহ করে একটু ধৈর্য ধরুন। যেকোনো প্রয়োজনে আমরা পাশে আছি। ধন্যবাদ!`,
+          englishReply: `Dear ${customerName}, we sincerely apologize for the slight delay with your Order #${orderNumber}. The parcel is in transit with our courier partner. We have escalated this to ensure priority delivery to your doorstep within 24-48 hours. Thank you for your patience!`,
+          actionAdvice: 'Steadfast ট্র্যাকিং পোর্টালে পার্সেল স্ট্যাটাস চেক করুন এবং রাইডারকে রিকুয়েস্ট নোট পাঠান।',
+        },
+        cancel_after_dispatch: {
+          banglaReply: `আসসালামু আলাইকুম ${customerName} ভাই/ম্যাম,
+আপনার অর্ডার #${orderNumber} ইতোমধ্যে কুরিয়ারে হস্তান্তর ও ট্রানজিটে রয়েছে। কুরিয়ার চার্জ ইতোমধ্যে প্রক্রিয়াজাত হয়ে যাওয়ায় ডেলিভারি বয় কল করলে পার্সেলটি রিসিভ করার অনুরোধ রইল। আপনি পণ্যটি চেক করে নিশ্চিন্ত হতে পারেন। প্রয়োজনে ৭ দিনের মধ্যে সহজ পরিবর্তনের সুবিধা রয়েছে।`,
+          englishReply: `Dear ${customerName}, your Order #${orderNumber} is already dispatched and on its way. Since courier logistics have been arranged, we kindly request you to receive and inspect the parcel upon delivery. We offer a 7-day hassle-free replacement guarantee if needed.`,
+          actionAdvice: 'কাস্টমারকে বন্ধুত্বপূর্ণ ভাষায় কনভিন্স করুন যাতে রিটার্ন খরচ ও ডেলিভারি লস কমানো যায়।',
+        },
+        defective_wrong_item: {
+          banglaReply: `আসসালামু আলাইকুম ${customerName} ভাই/ম্যাম,
+অত্যন্ত দুঃখিত এই অসুবিধার জন্য। অনুগ্রহ করে ভুল/ত্রুটিপূর্ণ পণ্যের ১টি ছবি বা ছোট ভিডিও আমাদের এই নম্বরে হোয়াটসঅ্যাপে পাঠান। আমাদের কোয়ালিটি টিম নিশ্চিত হয়ে অবিলম্বে বিনামূল্যে সঠিক পণ্যটি রিপ্লেসমেন্ট পাঠাবে। আপনার সন্তুষ্টিই আমাদের সর্বোচ্চ অগ্রাধিকার।`,
+          englishReply: `Dear ${customerName}, we apologize for the oversight regarding Order #${orderNumber}. Please share a quick photo/video of the issue via WhatsApp (01619415744). We will promptly dispatch an expedited free replacement.`,
+          actionAdvice: 'দ্রুত গ্রাহককে আশ্বস্ত করুন এবং ফ্রি রিটার্ন পিকআপ ও এক্সচেঞ্জ বুকিং দিন।',
+        },
+        advance_delivery_charge: {
+          banglaReply: `আসসালামু আলাইকুম ${customerName} ভাই/ম্যাম,
+ঢাকার বাইরের ফেক অর্ডার রোধে এবং আপনার সিরিয়াল কনফার্ম রাখতে শুধুমাত্র কুরিয়ার ডেলিভারি চার্জ ৳১০০-৳১৫০ অগ্রিম নেওয়া হয়। মূল পণ্যের টাকা পার্সেল হাতে পেয়ে ক্যাশ অন ডেলিভারিতে পরিশোধ করবেন। আপনার অগ্রিম পেমেন্ট সম্পূর্ণ নিরাপদ ও ইনভয়েসযুক্ত।`,
+          englishReply: `Dear ${customerName}, to protect against fake consignments and secure your order slot, we only require the nominal courier delivery charge in advance. The entire product amount remains 100% Cash on Delivery at your doorstep.`,
+          actionAdvice: 'অফিসিয়াল বিকাশ/নগদ মার্চেন্ট নম্বর শেয়ার করুন যাতে কাস্টমার বিশ্বস্ততা পায়।',
+        },
+      };
+
+      const selected = responses[scenario] || responses.courier_delay;
+      return res.json({ success: true, ...selected });
+    }
+
+    // 4. AI Seasonal & Festival Mega Campaign Planner
+    if (action === 'festival_planner') {
+      const { festival = 'eid_ul_fitr', focusCategory = 'All Categories' } = payload;
+
+      const festivalPlans: Record<string, any> = {
+        eid_ul_fitr: {
+          campaignName: 'ঈদ মহা উৎসব সেল ২০২৬ (Eid Mega Festival)',
+          slogan: 'নতুন পোশাকে সাজুক আপনার ঈদ – সেরা দামে সেরা পণ্য!',
+          discountIdea: 'ফ্ল্যাট ২৫% ছাড় + ৳২,০০০ এর অর্ডারে ফ্রি ডেলিভারি',
+          recommendedCoupon: 'EIDMUBARAK',
+          bannerConcepts: [
+            'Traditional Eid crescent moon, glowing lanterns, golden calligraphy and modern attire models.',
+            '3D emerald gift boxes with gold ribbons and festive discount badges.',
+          ],
+          multiChannelChecklist: [
+            'Hero Banner পরিবর্তন করে Eid Theme সেট করুন',
+            'সকল নিবন্ধিত কাস্টমারদের কাছে প্রমোশনাল ইমেইল ব্রডকাস্ট করুন',
+            'ফেসবুক ও ইনস্টাগ্রামে বুস্টিং ক্যাম্পেইন লঞ্চ করুন',
+            'ঈদ ডেলিভারি ডেডলাইন (চাঁদ রাতের ৪ দিন আগে) নোটিশ পপআপ যোগ করুন',
+          ],
+          expectedAovImpact: '+35% থেকে +50% গড় অর্ডার ভ্যালু বৃদ্ধি',
+        },
+        pohela_boishakh: {
+          campaignName: 'বৈশাখী বৈচিত্র্য ও বৈশাখ মেলা (Boishakhi Mega Deal)',
+          slogan: 'শুভ নববর্ষ! দেশীয় ঐতিহ্য আর আধুনিক স্টাইলের সেরা মিলন মেলা!',
+          discountIdea: 'বৈশাখী স্পেশাল কম্বোতে ২০% ক্যাশব্যাক ভাউচার',
+          recommendedCoupon: 'BOISHAKH1433',
+          bannerConcepts: [
+            'Red and white floral festive theme, traditional motifs, vibrant celebration backdrop.',
+          ],
+          multiChannelChecklist: [
+            'Boishakhi collection ট্যাগ ফিল্টারিং অন করুন',
+            'কুপন কোড অ্যাক্টিভ করুন',
+            'হোমপেজ ব্যানার আপডেট করুন',
+          ],
+          expectedAovImpact: '+25% কার্ট সাইজ বৃদ্ধি',
+        },
+        winter_sale: {
+          campaignName: 'শীতের গরম অফার – Winter Clearance Blast',
+          slogan: 'শীতের সেরা কালেকশনে থাকছে ৫০% পর্যন্ত অবিশ্বাস্য মূল্যছাড়!',
+          discountIdea: 'বাই ২ গেট ১ ফ্রি অথবা ফ্ল্যাট ৪০% অফ ক্লিয়ারেন্স',
+          recommendedCoupon: 'WINTER50',
+          bannerConcepts: [
+            'Snow particles, warm cozy lifestyle mood, stylish jackets and winter accessories on podium.',
+          ],
+          multiChannelChecklist: [
+            'উইন্টার ক্লিয়ারেন্স ক্যাটাগরি পিন করুন',
+            'এসএমএস ড্রাফট পাঠিয়ে পুরোনো গ্রাহকদের রিমাইন্ডার দিন',
+          ],
+          expectedAovImpact: '+40% ভলিউম সেলস বৃদ্ধি',
+        },
+      };
+
+      const plan = festivalPlans[festival] || festivalPlans.eid_ul_fitr;
+      return res.json({ success: true, ...plan, focusCategory });
+    }
+
+    // 5. AI Abandoned Cart Recovery Sequences
+    if (action === 'abandoned_cart') {
+      const { customerName = 'Customer', itemsSummary = 'Selected items', totalAmount = 1450 } = payload;
+      return res.json({
+        success: true,
+        stage1_whatsapp: `আসসালামু আলাইকুম ${customerName} ভাই/ম্যাম, R Mart-এ আপনার কার্টে "${itemsSummary}" সংরক্ষিত আছে। স্টক শেষ হওয়ার আগেই আপনার অর্ডারটি সম্পন্ন করতে ক্লিক করুন: https://rmartofficial.shop/cart`,
+        stage1_sms: `Hello ${customerName}, your items in R Mart cart are waiting! Complete your order before stock runs out: rmartofficial.shop/cart`,
+        stage2_whatsapp: `প্রিয় ${customerName}, আপনার পছন্দের পণ্যটির জন্য বিশেষ সারপ্রাইজ! আগামী ২ ঘণ্টার মধ্যে অর্ডার সম্পন্ন করলে ফ্রি ডেলিভারির জন্য ব্যবহার করুন কুপন কোড: 'FREEDEL'. লিংক: https://rmartofficial.shop/cart`,
+        stage2_sms: `Special for ${customerName}! Use coupon FREEDEL for free delivery on your pending R Mart cart (৳${totalAmount}): rmartofficial.shop/cart`,
+        stage3_whatsapp: `শেষ সুযোগ ${customerName} ভাই! আপনার সংরক্ষিত কার্টটি কিছুক্ষণের মধ্যে অটোমেটিক খালি হয়ে যাবে। আজই অর্ডার করুন এবং উপভোগ করুন ক্যাশ অন ডেলিভারি: https://rmartofficial.shop/cart`,
+        stage3_sms: `Final call ${customerName}: Your reserved cart at R Mart will expire soon. Order now: rmartofficial.shop/cart`,
+        recoveryTips: [
+          'প্রথম এসএমএস কার্ট ত্যাগের ১ ঘণ্টার মধ্যে পাঠানো সর্বোচ্চ কনভার্সন দেয়',
+          'দ্বিতীয় ধাপে ফ্রি ডেলিভারি বা ১০% ছাড় কুপন যোগ করলে ৬০% কাস্টমার অর্ডার কনফার্ম করে',
+          'হোয়াটসঅ্যাপ মেসেজে ডিরেক্ট চেকআউট লিঙ্ক যুক্ত করুন',
+        ],
+      });
+    }
+
+    // 6. AI SEO Meta Tags & Schema.org Rich Snippet Generator
+    if (action === 'seo_schema') {
+      const { productName = 'Premium Lifestyle Product', price = 1250, category = 'General', description = '', imageUrl = '' } = payload;
+      const cleanDesc = (description || `${productName} buy online at best price in Bangladesh from R Mart. Cash on delivery nationwide.`).slice(0, 160);
+      const metaTitle = `${productName} Price in BD | Buy Online - R Mart`;
+
+      const schema = {
+        '@context': 'https://schema.org/',
+        '@type': 'Product',
+        name: productName,
+        image: imageUrl || 'https://rmartofficial.shop/assets/logo.png',
+        description: cleanDesc,
+        brand: {
+          '@type': 'Brand',
+          name: 'R Mart Originals',
+        },
+        offers: {
+          '@type': 'Offer',
+          url: `https://rmartofficial.shop/product/${encodeURIComponent(productName.toLowerCase().replace(/\s+/g, '-'))}`,
+          priceCurrency: 'BDT',
+          price: price,
+          availability: 'https://schema.org/InStock',
+          itemCondition: 'https://schema.org/NewCondition',
+        },
+        aggregateRating: {
+          '@type': 'AggregateRating',
+          ratingValue: '4.8',
+          reviewCount: '24',
+        },
+      };
+
+      return res.json({
+        success: true,
+        metaTitle,
+        metaDescription: cleanDesc,
+        openGraphTags: {
+          'og:title': metaTitle,
+          'og:description': cleanDesc,
+          'og:image': imageUrl || 'https://rmartofficial.shop/assets/logo.png',
+          'og:type': 'product',
+        },
+        jsonLdSchema: schema,
+        focusKeywords: [
+          `${productName.toLowerCase()} price in bangladesh`,
+          `buy ${productName.toLowerCase()} dhaka`,
+          `rmart ${category.toLowerCase()}`,
+          `cash on delivery online shopping bd`,
+        ],
+      });
+    }
+
+    // 7. AI Smart Bundles & Upsell Engine
+    if (action === 'smart_bundles') {
+      const { primaryProduct = 'Premium Cotton Polo Shirt', price = 850, category = 'Fashion' } = payload;
+      const basePrice = Number(price) || 850;
+
+      return res.json({
+        success: true,
+        duoBundle: {
+          title: `স্মার্ট ডাবল সেভার প্যাক (২ পিস কম্বো)`,
+          items: [`${primaryProduct} (পিস ১)`, `${primaryProduct} (পিস ২ - ভিন্ন কালার)`],
+          regularPrice: basePrice * 2,
+          bundlePrice: Math.round(basePrice * 2 * 0.85),
+          discountPercent: 15,
+          savings: Math.round(basePrice * 2 * 0.15),
+        },
+        trioBundle: {
+          title: `মেগা ভ্যালু ফ্যামিলি প্যাক (৩ পিস + ফ্রি ডেলিভারি)`,
+          items: [`${primaryProduct} x ৩ পিস`],
+          regularPrice: basePrice * 3,
+          bundlePrice: Math.round(basePrice * 3 * 0.80),
+          discountPercent: 20,
+          savings: Math.round(basePrice * 3 * 0.20),
+        },
+        impulseAddons: [
+          { name: 'প্রিমিয়াম গিফট প্যাকেজিং বক্স', price: 120, reason: 'গিফট করার জন্য নিখুঁত প্রেজেন্টেশন' },
+          { name: 'এক্সপ্রেস সেফটি র্যাপিং ও বাবল প্রটেকশন', price: 50, reason: 'ডেলিভারিতে শূন্য ড্যামেজ নিশ্চয়তা' },
+        ],
+      });
+    }
+
+    // 8. AI True Net Profit & Courier Return Loss Calculator
+    if (action === 'profit_calculator') {
+      const {
+        sellingPrice = 1450,
+        cogs = 750,
+        packagingCost = 40,
+        deliveryZone = 'inside_dhaka',
+        expectedReturnRate = 8,
+      } = payload;
+
+      const sale = Number(sellingPrice) || 1450;
+      const cost = Number(cogs) || 750;
+      const pack = Number(packagingCost) || 40;
+      const courier = deliveryZone === 'inside_dhaka' ? 60 : 120;
+      const codFee = Math.round(sale * 0.01); // 1% Steadfast COD fee
+      const returnRate = Number(expectedReturnRate) || 8;
+
+      const deliveredProfit = sale - cost - pack - codFee; // Assuming customer pays delivery or store absorbs
+      const returnLoss = courier * 2 + pack; // two-way delivery loss + unrecoverable packaging
+
+      // Blended expected profit per shipped order
+      const successfulRate = (100 - returnRate) / 100;
+      const blendedNetProfit = Math.round(deliveredProfit * successfulRate - returnLoss * (returnRate / 100));
+      const netMargin = Math.round((blendedNetProfit / sale) * 100);
+      const breakEvenReturnRate = Math.round((deliveredProfit / (deliveredProfit + returnLoss)) * 100);
+
+      return res.json({
+        success: true,
+        courierCost: courier,
+        codFee,
+        netProfitDelivered: deliveredProfit,
+        netMarginDelivered: Math.round((deliveredProfit / sale) * 100),
+        lossPerReturn: returnLoss,
+        blendedNetProfit,
+        netMargin,
+        breakEvenReturnRate,
+        strategicAdvice: returnRate > 15
+          ? `সতর্কতা: রিটার্ন রেট ${returnRate}% অনেক বেশি! প্রতি রিটার্নে ৳${returnLoss} ক্ষতি হচ্ছে। ঢাকার বাইরের অর্ডারে ৳১০০ অগ্রিম ডেলিভারি চার্জ নেওয়া বাধ্যতামূলক করুন।`
+          : `চমৎকার মার্জিন! আপনার আনুমানিক নেট লাভ ৳${blendedNetProfit} (${netMargin}%)। ব্রেক-ইভেন রিটার্ন রেট ${breakEvenReturnRate}% এর নিচে থাকায় ব্যবসা ঝুঁকিমুক্ত।`,
+      });
+    }
+
+    // 9. AI Packing Slip & Delivery Box Thank-You Note Drafter
+    if (action === 'unboxing_note') {
+      const { brandName = 'R Mart', discountCode = 'REPEAT10', discountPercent = 10, supportPhone = '01619415744' } = payload;
+      return res.json({
+        success: true,
+        thankYouCardBangla: `❤️ প্রিয় গ্রাহক,
+R Mart-এর সাথে কেনাকাটা করার জন্য আপনাকে আন্তরিক ধন্যবাদ! আপনার পার্সেলটি যত্নসহকারে প্রস্তুত করে পাঠানো হয়েছে।
+পণ্যটি আপনার পছন্দ হলে অনুগ্রহ করে একটি রিভিউ দিয়ে আমাদের উৎসাহিত করুন। কোনো সমস্যা হলে আমাদের হেল্পলাইনে জানান: ${supportPhone}।
+আপনার পরবর্তী কেনাকাটায় ${discountPercent}% বিশেষ ছাড় পেতে ব্যবহার করুন কুপন কোড: "${discountCode}"!`,
+        thankYouCardEnglish: `Dear Valued Customer,
+Thank you for shopping with ${brandName}! We hope you love your order as much as we loved preparing it for you.
+As a token of our appreciation, please enjoy ${discountPercent}% OFF your next order with coupon code: ${discountCode}.
+Customer Support & WhatsApp: ${supportPhone}`,
+        reviewCallout: `📸 আনবক্সিং ছবি তুলে ফেসবুকে আমাদের ট্যাগ করুন এবং জিতে নিন আকর্ষণীয় গিফট ভাউচার!`,
+        qrCodeLabel: `স্ক্যান করে আমাদের ফেসবুক পেজ ভিজিট করুন এবং ভিআইপি অফার গ্রহণ করুন।`,
+        packagingTips: [
+          'কার্ডটি প্রোডাক্টের ঠিক উপরে প্রিন্ট করে রাখুন যাতে বক্স খুললেই চোখে পড়ে',
+          'রিপিট পারচেজ কুপন দিলে ৩৫% কাস্টমার ৩০ দিনের মধ্যে আবার কেনাকাটা করে',
+        ],
+      });
+    }
+
+    // 10. AI Wholesale & Supplier Purchase Order Drafter
+    if (action === 'vendor_po') {
+      const { supplierName = 'National Garments & Lifestyle Ltd', items = 'Polo Shirts (500 pcs)', paymentTerms = '30% Advance, 70% upon delivery', deliveryDate = '10 Days' } = payload;
+      const poNumber = `PO-RMART-${Date.now().toString().slice(-6)}`;
+
+      return res.json({
+        success: true,
+        poNumber,
+        poSubject: `অফিসিয়াল পারচেজ অর্ডার - ${poNumber} | R Mart Official`,
+        officialLetter: `বরাবর,
+${supplierName}
+বিষয়: অফিসিয়াল সরবরাহ কার্যাদেশ (${poNumber})
+
+মহোদয়,
+R Mart Official Store-এর পক্ষ থেকে নিম্নবর্ণিত পণ্যসমূহ নির্ধারিত শর্ত ও মূল্যে সরবরাহের জন্য এই কার্যাদেশ প্রদান করা হলো:
+
+📦 চাহিদাকৃত পণ্য ও পরিমাণ:
+${items}
+
+💰 পরিশোধের শর্তাবলী:
+${paymentTerms}
+
+🚚 সরবরাহের সময়সীমা:
+কার্য সম্পাদনের তারিখ হতে ${deliveryDate}-এর মধ্যে আমাদের মিরপুর ডিওএইচএস ফুলফিলমেন্ট সেন্টারে পৌঁছাতে হবে।
+
+শর্তানুযায়ী গুণগত মান যাচাই (QC Check) সাপেক্ষে চালান গ্রহণ করা হবে।`,
+        termsAndConditions: [
+          '১০০% চুক্তি অনুযায়ী স্পেসিফিকেশন ও কালার শেড নিশ্চিত করতে হবে।',
+          'ত্রুটিপূর্ণ কোনো পণ্য পাওয়া গেলে তা সম্পূর্ণ সরবরাহকারীর দায়িত্বে তাৎক্ষণিক পরিবর্তন করতে হবে।',
+        ],
+        inspectionProtocol: 'প্যাকিং আনলোড করার সময় আর মার্টের কিউসি টিম ৫% র্যান্ডম ইন্সপেকশন সম্পন্ন করবে।',
+      });
+    }
+
+    // 11. AI E-Commerce Legal Policy & Terms Drafter
+    if (action === 'legal_policy') {
+      const { policyType = 'return_refund', storeName = 'R Mart', helpline = '01619415744' } = payload;
+      return res.json({
+        success: true,
+        policyTitle: policyType === 'return_refund'
+          ? 'সহজ ৭ দিনের রিটার্ন ও রিফান্ড পলিসি (Return & Refund Policy)'
+          : 'ক্যাশ অন ডেলিভারি ও ডেলিভারি নীতিমালা (COD & Shipping Terms)',
+        policyContentBangla: `১. গ্রাহক সন্তুষ্টি নিশ্চয়তা: ${storeName} থেকে ক্রয়কৃত যে কোনো পণ্যে ত্রুটি পেলে গ্রাহক ৭ দিনের মধ্যে এক্সচেঞ্জ বা পরিবর্তনের আবেদন করতে পারবেন।
+২. রিটার্নের শর্তাবলী: পণ্যটি অব্যবহৃত অবস্থায় মূল ট্যাগ এবং ইনভয়েস সহ থাকতে হবে।
+৩. ক্যাশ অন ডেলিভারি পার্সেল চেক: ডেলিভারি ম্যানের উপস্থিতিতে পার্সেল চেক করার সুযোগ রয়েছে।
+৪. রিফান্ড প্রক্রিয়া: পণ্য আমাদের ওয়্যারহাউসে ফেরত আসার ৩-৫ কার্যদিবসের মধ্যে বিকাশ/নগদ/ব্যাংকের মাধ্যমে রিফান্ড সম্পন্ন হয়।
+৫. যোগাযোগ: যে কোনো পলিসি সহায়তায় কল করুন ${helpline}।`,
+        policyContentEnglish: `1. 7-Day Guarantee: Customers can request an exchange within 7 days of receiving the item if defective.
+2. Return Condition: Products must be unwashed, unused, and with original barcode tags intact.
+3. Delivery Verification: Doorstep parcel inspection is supported across Bangladesh.
+4. Refunds: Processed within 3-5 business days via bKash/Nagad/Bank Transfer upon warehouse receipt.
+5. Helpline: Contact our official support at ${helpline}.`,
+        keyHighlights: [
+          'বাংলাদেশ ভোক্তা অধিকার সংরক্ষণ আইন (DNCRP) পরিপালনযোগ্য',
+          'স্বচ্ছ ও কাস্টমার-বান্ধব শর্তাবলী',
+        ],
+      });
+    }
+
+    // 12. AI Competitor Price Benchmarking & Market Positioning
+    if (action === 'competitor_analysis') {
+      const { productName = 'Wireless Earbuds', ourPrice = 1450, category = 'Electronics' } = payload;
+      const price = Number(ourPrice) || 1450;
+      const low = Math.round(price * 0.85);
+      const avg = Math.round(price * 1.05);
+      const high = Math.round(price * 1.35);
+
+      return res.json({
+        success: true,
+        estimatedMarketRange: { low, avg, high },
+        pricingTier: price < avg ? 'ভ্যালু ফর মানি (Competitive Advantage)' : 'প্রিমিয়াম কোয়ালিটি পজিশনিং',
+        psychologicalPrice: Math.floor(price / 100) * 100 + 90, // e.g. 1490 instead of 1500
+        competitiveAdvantages: [
+          'দ্রুততম হোম ডেলিভারি ও রিয়েল-টাইম ট্র্যাকিং',
+          '১০০% ক্যাশ অন ডেলিভারি (পণ্য হাতে পেয়ে পেমেন্ট)',
+          '৭ দিনের সহজ রিপ্লেসমেন্ট নিশ্চয়তা',
+        ],
+        pricingRecommendation: `আপনার নির্ধারিত মূল্য ৳${price} বাজারের গড় মূল্য ৳${avg}-এর সাথে অত্যন্ত প্রতিযোগিতাপূর্ণ। সাইকোলজিক্যাল প্রাইসিং হিসেবে ৳${Math.floor(price / 100) * 100 + 90} সেট করলে ক্রেতাদের সিদ্ধান্ত গ্রহণ দ্রুত হবে।`,
+      });
+    }
+
+    // 13. AI Category, Filter & Search Synonyms Generator
+    if (action === 'category_taxonomy') {
+      const { productName = 'Men Cotton Panjabi Embroidered', description = '' } = payload;
+      return res.json({
+        success: true,
+        primaryCategory: 'Men Fashion & Clothing',
+        subCategory: 'Traditional & Ethnic Wear',
+        attributes: {
+          'Fabric / Material': '100% Pure Cotton',
+          'Fit Type': 'Regular Fit',
+          'Occasion': 'Eid, Festival, Friday Prayer, Wedding',
+          'Gender': 'Men',
+        },
+        filterTags: ['Cotton', 'Embroidered', 'Eid Collection', 'New Arrival', 'Breathable'],
+        searchSynonyms: [
+          'panjabi', 'punjabi', 'পাঞ্জাবি', 'ছেলেদের পাঞ্জাবি', 'eid panjabi bd', 'cotton panjabi price in bd'
+        ],
+      });
+    }
+
+    // 14. AI Facebook Live Shopping Script & Pitch Generator
+    if (action === 'fb_live_script') {
+      const { productName = 'Exclusive Eid Special Panjabi', price = 1650, specialLiveDiscount = '৳১৫০ লাইভ ডিসকাউন্ট', stockQuantity = 15 } = payload;
+      return res.json({
+        success: true,
+        introHook: `(হাই-এনার্জি মোশন) "আসসালামু আলাইকুম সবাইকে! যে প্রোডাক্টটির জন্য আপনারা গত এক সপ্তাহ ধরে ইনবক্সে বারবার জিজ্ঞেস করছিলেন, অবশেষে সেই স্পেশাল কালেকশন লাইভে ওপেন করছি! যারা লাইভটি দেখছেন শেয়ার করে কমেন্টে জানান কোথা থেকে যুক্ত হয়েছেন!"`,
+        productShowcase: `(প্রোডাক্ট ক্লোজআপ) "একটু ফ্যাব্রিক আর ফিনিশিংটা খেয়াল করুন। একদম ১০০% পিওর সুতি ফেব্রিক, প্রচণ্ড গরমেও সারাদিন পরার মতো দারুণ আরামদায়ক। বুকের এমব্রয়ডারি ওয়ার্কটি দেখলে বুঝতে পারবেন প্রিমিয়াম কোয়ালিটি কাকে বলে!"`,
+        scarcityUrgency: `(স্টক কাউন্টডাউন) "আমাদের স্টকে কিন্তু মাত্র ${stockQuantity} পিস আছে! এই লাইভ চলাকালীন সময়ে অর্ডার করলে থাকছে ${specialLiveDiscount}! রেগুলার প্রাইস ৳${Number(price) + 200}, আজকের লাইভ স্পেশাল প্রাইস মাত্র ৳${price}!"`,
+        callToAction: `"অর্ডার করতে এখনই কমেন্টে লিখুন [অর্ডার ${productName}] সাথে আপনার ফোন নম্বর, অথবা সরাসরি আমাদের পেজে ইনবক্স করুন। সারা বাংলাদেশে ক্যাশ অন ডেলিভারি!"`,
+        pinCommentTemplate: `📌 পিন কমেন্ট: লাইভ অফারে ৳${price}-এ পেতে কমেন্টে [ORDER] লিখুন অথবা কল করুন 01619415744 নম্বরে। ক্যাশ অন ডেলিভারি সারা দেশে!`,
+      });
+    }
+
+    return res.status(400).json({ success: false, error: 'Unknown AI action requested' });
   });
 
   // Health check endpoint

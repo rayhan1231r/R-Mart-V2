@@ -130,7 +130,7 @@ export const Footer: React.FC<FooterProps> = ({ settings: propSettings, navigate
               </div>
               <div className="flex items-center gap-2.5 text-slate-700">
                 <MapPin className="w-4 h-4 text-emerald-600 shrink-0" />
-                <span>{settings?.address || 'Dhaka, Bangladesh · Official Distribution Hub'}</span>
+                <span>{activeSettings?.address || 'Dhaka, Bangladesh · Official Distribution Hub'}</span>
               </div>
             </div>
           </div>
@@ -224,7 +224,7 @@ export const Footer: React.FC<FooterProps> = ({ settings: propSettings, navigate
 
         {/* Bottom Bar with payment options */}
         <div className="mt-12 pt-6 border-t border-slate-200 flex flex-col sm:flex-row items-center justify-between gap-4 text-xs text-slate-500">
-          <p>© {currentYear} {settings?.storeName || 'R Mart'} ({settings?.domain || 'rmartofficial.shop'}). Bangladesh’s Verified Online Store. All rights reserved.</p>
+          <p>© {currentYear} {activeSettings?.storeName || 'R Mart'} ({activeSettings?.domain || 'rmartofficial.shop'}). Bangladesh’s Verified Online Store. All rights reserved.</p>
           <div className="flex flex-wrap items-center gap-2.5">
             <span className="text-[11px] text-slate-600 font-medium">Payment Partners:</span>
             <span className="px-2.5 py-1 rounded-lg bg-slate-100 text-slate-800 font-bold text-[10px] border border-slate-200">

@@ -86,7 +86,7 @@ export const AdminLayout: React.FC<AdminLayoutProps> = ({
 
   const menuItems = [
     { label: 'Dashboard', path: '/admin', icon: LayoutDashboard },
-    { label: 'AI Business Co-Pilot', path: '/admin/ai-agent', icon: Bot, isNew: true },
+    { label: 'AI Suite & Co-Pilot (22 Tools)', path: '/admin/ai-agent', icon: Bot, isNew: true },
     { label: 'Courier Dispatch Hub', path: '/admin/courier', icon: Truck, isNew: true },
     { label: 'Products', path: '/admin/products', icon: Package },
     { label: 'Categories', path: '/admin/categories', icon: Layers },
